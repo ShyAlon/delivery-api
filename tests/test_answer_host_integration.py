@@ -176,6 +176,7 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
                         if parked_pid is not None:assert live_pid==parked_pid
                         parked_pid=live_pid
                         trace2=client._last_answer_trace
+                        if os.getenv('ANSWER_TRACE_DUMP'):print('ANSWER_TRACE_DUMP',json.dumps(trace2))
                         print('ANSWER_FOLLOWUP',turn,trace2['total_syncs'],trace2['parent']['syncs'],sum(v['syncs'] for v in trace2['child']['callers'].values()))
                         assert trace2['child']['complete'] and trace2['parent_wire_complete']
                     with w.admin() as c:

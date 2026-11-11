@@ -86,3 +86,17 @@ consume escaped newlines and corrupt the export. The real-spool collector test
 caught this. Export never consumes evidence, starts work, imports documents or
 replays paid calls. No automatic expiry; capacity exhaustion is visible as a
 best-effort-copy failure. Stop remains41 barriers, known above-target debt.
+
+Owner test handoff needs a real executable route, not a guessed preview action.
+The candidate accounting path remains inactive. `answer-candidate-test.py` first
+checks DB TCP/read-only login from the repo's private .env, then checkout/tool
+inputs, the migration inventory (its existing exact phrase only if pending),
+rebuild, a free isolated proof and req debug. The proof uses a fake HTTP provider
+and disposable PG, with default0.1 estimate. It does not prove live-pooler answer
+latency or activate the runtime. Use an isolated uv proof environment rather
+than assume delivery's venv contains engine dependencies. The real collector
+carries the three turn traces and cold29/nextcold29/warm26 table in its ZIP.
+
+macOS has no memfd_create. Trace via an anonymous pipe drained on a dedicated
+thread, never a temporary disk file; failed tracing remains incomplete, not zero.
+Tests cover the missing-Linux-API path and the real free proof still counts29/26.

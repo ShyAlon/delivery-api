@@ -30,7 +30,7 @@ def caller():
 class WireTrace:
     """Count actual outgoing Sync/simple Query barriers in an operation.
 
-    libpq protocol bytes exist only in an anonymous RAM fd while wait runs.
+    libpq protocol bytes pass only through an anonymous pipe while wait runs.
     They are discarded before returning. Only counts, duration and code callers
     survive. Startup/auth packets are not query barriers. Pool liveness is included.
     """
@@ -40,30 +40,42 @@ class WireTrace:
     def snapshot(self):
         with self.lock:return [{'caller':k,'waits':v[0],'syncs':v[1],'duration_ms':round(v[2],3)} for k,v in sorted(self.rows.items())]
     def _wait(self,original,conn,generator,*args,**kw):
-        # A wait may run on another writer thread. Never keep transaction-local state here.
-        name=caller();began=time.monotonic();fd=None;count=None
+        # The macOS owner proof has no memfd_create. A pipe drains protocol
+        # bytes concurrently, so it needs neither disk nor a Linux-only fd.
+        name=caller();began=time.monotonic();fd=None;reader=None;thread=None;count=None;captured=[0,True]
+        def drain():
+            pending=b''
+            try:
+                while True:
+                    chunk=os.read(reader,65536)
+                    if not chunk:break
+                    parts=(pending+chunk).split(b'\n');pending=parts.pop()
+                    for line in parts:
+                        captured[0]+=int(b'\tF\t' in line and (b'\tSync' in line or b'\tQuery\t' in line))
+                    # Query payloads can be large; only the bounded protocol
+                    # record header is relevant. Never retain raw SQL/text.
+                    if len(pending)>262144:pending=pending[:512]
+                if pending:
+                    captured[0]+=int(b'\tF\t' in pending and (b'\tSync' in pending or b'\tQuery\t' in pending))
+            except OSError:captured[1]=False
         try:
             try:
-                fd=os.memfd_create('answer-protocol',os.MFD_CLOEXEC)
+                reader,fd=os.pipe()
+                thread=threading.Thread(target=drain,daemon=True,name='answer-wire-drain');thread.start()
                 conn.pgconn.trace(fd)
             except (OSError,AttributeError):
                 return original(conn,generator,*args,**kw)
             try:return original(conn,generator,*args,**kw)
             finally:
-                try:
-                    conn.pgconn.untrace();os.lseek(fd,0,0)
-                    chunks=[]
-                    while True:
-                        part=os.read(fd,65536)
-                        if not part:break
-                        chunks.append(part)
-                    # Exact protocol type, never a SQL keyword or row count.
-                    lines=b''.join(chunks).splitlines()
-                    count=sum(b'\tF\t' in line and (b'\tSync' in line or b'\tQuery\t' in line) for line in lines)
-                    del chunks,lines
-                except (OSError,AttributeError):pass
+                try:conn.pgconn.untrace()
+                except (OSError,AttributeError):captured[1]=False
+                os.close(fd);fd=None
+                thread.join()
+                if captured[1]:count=captured[0]
         finally:
             if fd is not None:os.close(fd)
+            if thread is not None and thread.is_alive():thread.join()
+            if reader is not None:os.close(reader)
             with self.lock:
                 row=self.rows[name];row[0]+=1;row[1]+=count or 0;row[2]+=(time.monotonic()-began)*1000
                 if count is None:self.failed=True

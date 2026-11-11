@@ -28,7 +28,7 @@ done
 .venv/bin/python -c 'import sys;sys.exit(0 if sys.version_info >= (3,11) else 1)' || fail 'Python 3.11+ required in .venv.'
 [ -f scripts/ops/venv_check.py ] || fail 'missing dependency gate; pull current main.'
 .venv/bin/python scripts/ops/venv_check.py || fail 'dependencies missing; run the exact pip repair line above.'
-envfile="$HOME/.config/requi/preview.env"
+envfile="${PREVIEW_SETTINGS_FILE:-$HOME/.config/requi/preview.env}"
 case "$command" in
  backoffice-access) target=scripts/owner/backoffice-access.py;;
  debug) target=scripts/ops/preview-debug.py;;

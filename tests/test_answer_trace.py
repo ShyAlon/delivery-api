@@ -29,7 +29,7 @@ def test_parent_tables_count_syncs_not_trace_entries():
 def test_trace_failure_does_not_break_database_work(monkeypatch):
     import os,psycopg
     def unavailable(*a,**kw):raise OSError('anonymous fd unavailable')
-    monkeypatch.setattr(os,'memfd_create',unavailable)
+    monkeypatch.setattr(os,'pipe',unavailable)
     trace=WireTrace();trace.install()
     try:
         with psycopg.connect(DSN,autocommit=True) as c:assert c.execute('SELECT 7').fetchone()==(7,)
@@ -90,3 +90,16 @@ def test_concurrent_context_traces_are_isolated_and_restore_out_of_order():
         assert sum(r['syncs'] for r in one.result())==1
         assert sum(r['syncs'] for r in two.result())==1
     assert psycopg.Connection.wait is original
+
+
+def test_owner_platform_without_linux_memfd_still_counts(monkeypatch):
+    import os,psycopg
+    monkeypatch.delattr(os,'memfd_create',raising=False)
+    trace=WireTrace();trace.install()
+    try:
+        with psycopg.connect(DSN,autocommit=True) as c:
+            trace.reset();c.execute('SELECT 123456789').fetchone()
+            assert sum(row['syncs'] for row in trace.snapshot())==1
+            assert not trace.failed
+            assert '123456789' not in repr(trace.snapshot())
+    finally:trace.restore()
