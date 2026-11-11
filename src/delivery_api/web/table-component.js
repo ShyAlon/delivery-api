@@ -1,3 +1,4 @@
+import {activationAllowed} from './pointer-activation.js';
 // One Table owns table markup, cell behavior and structural styles in both apps.
 const styles=`
 .ui-table{border-collapse:collapse;width:100%;font-size:13px;text-align:left}
@@ -38,7 +39,7 @@ export class Table{
     const component=new Table(scroll,{columns:cols.map(c=>c.label),responsive:false}),tr=component.node.tHead.rows[0];
     cols.forEach((c,i)=>{const arrow=st.sort===c.key?(st.dir>0?' \u25B2':' \u25BC'):'';
       const th=tr.children[i];th.textContent=c.label+arrow;th.title=(c.tip||'')+' Click to sort.';th.className=c.num?'num':'';
-      th.onclick=()=>{if(st.sort===c.key)st.dir=-st.dir;else{st.sort=c.key;st.dir=1}draw()}});
+      th.onclick=e=>{if(!activationAllowed(e))return;if(st.sort===c.key)st.dir=-st.dir;else{st.sort=c.key;st.dir=1}draw()}});
     const body=component.body;
     view.forEach(r=>{const row=Table.row({querySelectorAll:()=>tr.children},cols.map(c=>text(r,c)));cols.forEach((c,i)=>row.children[i].classList.toggle('num',!!c.num));body.append(row)});
     const table=component.node;

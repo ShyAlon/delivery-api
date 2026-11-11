@@ -1,3 +1,4 @@
+import {activationAllowed} from './pointer-activation.js';
 /* Client-side router: navigation swaps only the outlet content (main#app); the shell persists. */
 import {leavePage,onPageExit,pageEpoch} from './page-lifecycle.js';
 import {clientLog} from './client-core.js';
@@ -56,6 +57,7 @@ export function startRouter(){
     const href=a.getAttribute('href');
     if(!href||!href.startsWith('/')||href.startsWith('//'))return;
     if(a.target||a.hasAttribute('download'))return;
+    if(!activationAllowed(e))return;
     e.preventDefault();
     navigate(href);
   });

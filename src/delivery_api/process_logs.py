@@ -276,3 +276,16 @@ def task_window(reader,owner_store,task_id,session_id,since,*,until=None):
         'scope':'retained exact task/session-attributed delivery, diagnostic and engine records',
         'omissions':['Unattributed lines excluded for privacy.','Files are rotating ephemeral storage; earlier rotated/restarted or never-recorded output is unrecoverable.',
             'Raw provider audit/payloads and host Ollama/OS logs excluded.'],'storage':'ephemeral retained files'}
+
+
+def navigation_export():
+    """Bounded existing client interaction evidence for the owner debug ZIP.
+
+    Reads only scrubbed activity records; never reads browser fields/settings,
+    connects to the database, or replays an interaction.
+    """
+    data=selected().records(stream='activity',limit=1200)
+    markers=('client.ui.activation','client.ui.focus','client.navigation','client.route.outcome')
+    rows=[row for row in data['records'] if any(marker in row.get('text','') for marker in markers)]
+    return {'scope':'retained client interaction records; not historical browser recovery',
+            'records':rows[-120:],'truncated':data['truncated'] or len(rows)>120,'unreadable':data['unreadable']}
