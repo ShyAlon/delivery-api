@@ -92,4 +92,5 @@ def test_unattributed_statements_name_their_worker_thread():
         t.start();t.join()
     finally:
         postgres_scope.request_stats.reset(token)
-    assert stats.trace[0][0] == 'unattributed[thread=asyncio]'
+    # 2026-11-10: the label also names the calling code (see test_trace_names_every_caller)
+    assert stats.trace[0][0].startswith('unattributed[thread=asyncio;from=')
