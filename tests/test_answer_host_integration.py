@@ -66,6 +66,8 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
             original=AnswerReceiptStore._call
             def counted(self,sql,params):payments.append(sql);return original(self,sql,params)
             monkeypatch.setattr(AnswerReceiptStore,'_call',counted)
+            from delivery_api import postgres_scope
+            stats=postgres_scope.RequestStats();token=postgres_scope.request_stats.set(stats)
             answer_phase[0]=True
             response=InputResponse(input_id=start.snapshot.open_input.input_id,
                 value='Bookings contain a customer and a time slot',actor_id='fake',expected_sequence=start.snapshot.sequence)
@@ -81,6 +83,8 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
                 with pytest.raises(Exception):submit()
             else:
                 result=submit();assert result.snapshot.sequence>start.snapshot.sequence
+            postgres_scope.request_stats.reset(token)
+            print('PARENT_ANSWER_TRACE',outcome,sum(e[3] for e in stats.trace),stats.transactions,stats.trace)
             assert len(calls)>call_count
             assert legacy==legacy_before
             assert 'requi_answer_start' in payments[0]
@@ -94,12 +98,23 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
                 assert receipt[0]=='settled' and balance==1000000000-receipt[2]
                 totals=w.store.retail_phase_totals(receipt[3]);assert sum(v['posted_units'] for v in totals.values())==receipt[2]
                 assert w.store.worker_job(receipt[3])['state']=='done'
+                before=len(calls)
+                if outcome=='success':
+                    assert client.submit(sid,response).snapshot.sequence==result.snapshot.sequence
+                    with pytest.raises(ValueError,match='conflicting'):client.submit(sid,response.model_copy(update={'value':'changed'}))
+                    assert client.resume(receipt[3]).sequence==result.snapshot.sequence
+                else:
+                    with pytest.raises(PermissionError,match='stopped'):client.resume(receipt[3])
+                assert len(calls)==before
                 if outcome=='stop':
                     assert len(calls)-call_count==1
                     assert client.snapshot(sid).open_input is None
             else:
                 assert receipt[0]=='pending' and receipt[2] is None and balance==900000000
                 assert w.store.retail_phase_totals(receipt[3])=={}
+                before=len(calls)
+                with pytest.raises(RuntimeError,match='pending'):client.submit(sid,response)
+                assert len(calls)==before
     finally:
         release.set()
         if client is not None:client.close()

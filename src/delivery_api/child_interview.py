@@ -215,7 +215,8 @@ class ChildInterviewClient(EngineClient):
             return StartSessionResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.RUN_STARTED))
     def submit(self,sid,response):
         from vmodel_contracts.interactive import SubmitInputResponse,EventType
-        self._execute(sid,response=response)
+        if self.answer_accounting is None or not self.answer_accounting.replay(self.store,sid,response):
+            self._execute(sid,response=response)
         with self._registry() as registry:
             session=registry.get(sid,serve=False)
             return SubmitInputResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.INPUT_ACCEPTED))
@@ -298,6 +299,18 @@ class ChildInterviewClient(EngineClient):
         if control.get('stopped') or row['generation']!=job['generation']:raise PermissionError('stopped or changed generation cannot resume')
         body=value['operation'];kind={'interview.start':'start','interview.route':'route'}.get(body['kind'],'answer')
         ref=body.get('request_ref') or body.get('answer_ref')
+        if self.answer_accounting is not None and kind=='answer' and value['binding']['provider']=='deepseek':
+            receipt=self.answer_accounting.prior(self.store,job['session_id'],body['wait_id'])
+            completed=self.store.decision_review(job['task_id'],'child-job:'+job_id,'child-completion-v1')
+            committed=control.get('sequence',0)>body['expected_sequence']
+            if not receipt or receipt['state']!='settled' or not completed or not committed:
+                raise PermissionError('two-touch answer requires receipt/publication reconciliation; never replay provider work')
+            if job['state']!='done':
+                self.store.reauthorize_worker(job_id)
+                capability=self.store.claim_worker(job_id)
+                if capability is None:raise PermissionError('recovery job already claimed')
+                capability.validate(self.store);self.store.finish_worker(job_id)
+            return self.snapshot(job['session_id'])
         self.store.reauthorize_worker(job_id)
         # A committed answer/start is completion recovery, not graph replay.
         committed=control.get('sequence',0)>(1 if kind=='start' else body['expected_sequence'])
@@ -347,9 +360,10 @@ class ChildInterviewClient(EngineClient):
                 import httpx
                 gateway=self.gateway_factory(capability,job_id)
                 if getattr(gateway,'retail_rates',None) is not None and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
+                input_payload=refs.get(ref,ref_kind)
                 answer_run=None
                 if self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek':
-                    answer_run=self.answer_accounting.begin(self.store,operation,refs.get(ref,ref_kind),gateway)
+                    answer_run=self.answer_accounting.begin(self.store,operation,input_payload,gateway)
                 journal=None if answer_run is not None else ChildBrokerJournal(self.store,operation)
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(task_id,'child-job:'+job_id,'compute:'+str(operation.binding.lease_epoch),value))
                 if answer_run is not None:
@@ -365,7 +379,7 @@ class ChildInterviewClient(EngineClient):
                 root=session_root(self.base,scope,sid);owner_root=root.parent
                 cfg={'version':1,'provider':operation.binding.provider,'binding':operation.binding.model_dump(mode='json'),
                     'dsn':self.dsn,'owner_root':str(owner_root),'input_ref':ref,
-                    'input':refs.get(ref,ref_kind),'question_quality':self.question_quality_config()['config'],
+                    'input':input_payload,'question_quality':self.question_quality_config()['config'],
                     'warm':ref_kind in ('answer','route')}
                 stop=asyncio.Event()
                 from .stop_watch import watch_for_stop
@@ -427,7 +441,17 @@ class ChildInterviewClient(EngineClient):
                         except Exception as error:child_error=error
                 # Both descriptor receivers have drained before the one correction.
                 # Unknown provider/compute evidence retains E, never fabricates a refund.
-                if answer_run is not None:answer_run.finish()
+                try:
+                    if answer_run is not None:answer_run.finish()
+                except BaseException:
+                    watcher.cancel()
+                    try:await watcher
+                    except asyncio.CancelledError:pass
+                    if handle is not None:
+                        await self.supervisor.reap(handle,operation,failed=True)
+                    drop_entry()
+                    if progress_ctx is not None:progress_ctx.__exit__(None,None,None)
+                    raise
                 timings['supervisor']=int((time.monotonic()-supervisor_at)*1000);completion_at=time.monotonic()
                 watcher.cancel()
                 try:await watcher

@@ -159,7 +159,8 @@ class AnswerProviderBroker:
         if (call.provider,call.model)!=(self.provider,self.model):raise ValueError('provider/model differs from answer snapshot')
         raw=base64.b64decode(call.serialized_request,validate=True)
         if not 0<len(raw)<=MAX_REQUEST:raise ValueError('supported serialized request required')
-        request_contract(raw,call.model)
+        payload,_=request_contract(raw,call.model)
+        if type(payload.get('stream',False)) is not bool:raise ValueError('boolean stream required')
         digest=hashlib.sha256(raw).hexdigest();key=(call.stage,call.call_id)
         with self.lock:
             if self.stop.is_set():raise InterruptedError('answer stopped')
@@ -213,9 +214,37 @@ class AnswerAccountingMode:
         # Validate E without taking a model/rate snapshot prematurely.
         self.start_credits=AnswerPricing(start_credits,RetailRates.from_environment({})).start_credits
 
+    def prior(self,store,session_id,input_id):
+        rows=store._postgres.read_one("""SELECT r.*,d.payload AS operation_payload,c.payload AS completion_payload,e.control AS session_control FROM answer_charge_receipts r
+          JOIN worker_jobs w ON w.job_id=r.job_id JOIN tasks t ON t.task_id=w.task_id
+          JOIN engine_sessions e ON e.session_id=r.session_id AND e.generation=r.generation
+          LEFT JOIN decision_reviews c ON c.task_id=t.task_id AND c.wait_id='child-job:'||r.job_id AND c.revision='child-completion-v1'
+          LEFT JOIN decision_reviews d ON d.task_id=t.task_id AND d.wait_id='child-job:'||r.job_id AND d.revision='child-operation-v1'
+          WHERE r.session_id=%s AND r.input_id=%s AND r.generation=t.generation AND t.deleted_at IS NULL""",(session_id,str(input_id)))
+        if len(rows)>1:raise RuntimeError('answer receipt identity ambiguous')
+        return dict(rows[0]) if rows else None
+
+    def replay(self,store,session_id,response):
+        prior=self.prior(store,session_id,response.input_id)
+        if prior is None:return False
+        operation=prior['operation_payload']
+        if isinstance(operation,str):operation=json.loads(operation)
+        if not operation:raise RuntimeError('original answer operation missing; reconcile without dispatch')
+        if response.expected_sequence is None:
+            response=response.model_copy(update={'expected_sequence':operation['operation']['expected_sequence']})
+        payload=json.dumps(response.model_dump(mode='json'),sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
+        if hashlib.sha256(payload).hexdigest()!=prior['input_digest']:raise ValueError('conflicting original answer input')
+        if prior['state']!='settled':raise RuntimeError('answer outcome pending; reconcile original job without redispatch')
+        control=prior['session_control']
+        if isinstance(control,str):control=json.loads(control)
+        if not prior['completion_payload'] or (control or {}).get('sequence',0)<=operation['operation']['expected_sequence']:
+            raise RuntimeError('answer settlement exists without verified publication; reconcile original job without redispatch')
+        return True
+
     def begin(self,store,operation,input_payload,gateway):
         if operation.operation.kind!='interview.answer' or operation.binding.provider!='deepseek':
             raise ValueError('two-touch mode currently supports paid interview answers only')
+        if gateway.job_id!=operation.binding.job_id:raise ValueError('answer gateway job mismatch')
         if getattr(gateway,'retail_rates',None) is None:
             raise ValueError('reviewed task retail rates required')
         payload=json.dumps(input_payload,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
