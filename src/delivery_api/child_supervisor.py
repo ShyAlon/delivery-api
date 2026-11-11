@@ -71,6 +71,7 @@ class _ChildHandle:
         self.reader=None;self.writer=None
         self.stderr_task=None;self.receive_task=None;self.stop_task=None
         self.sequence=0;self.state=None;self.child_error=None
+        self.timing_error=None;self.timing_failed=asyncio.Event()
 
 
 @dataclass(frozen=True)
@@ -82,11 +83,11 @@ class ChildResult:
 
 
 class ChildSupervisor:
-    def __init__(self,command,*,grace_seconds=10,kill_seconds=5,timing_sink=None):
+    def __init__(self,command,*,grace_seconds=10,kill_seconds=5,timing_sink=None,timing_batch_sink=None):
         if not command or any(not isinstance(v,str) or not v for v in command):raise ValueError('fixed trusted command required')
         if grace_seconds<=0 or kill_seconds<=0:raise ValueError('positive stop deadlines required')
         self.command=tuple(command);self.grace=grace_seconds;self.kill=kill_seconds
-        self._timing_sink=timing_sink
+        self._timing_sink=timing_sink;self._timing_batch_sink=timing_batch_sink
         self.active=False;self.last_result=None
 
     async def _reap(self,process):
@@ -140,6 +141,7 @@ class ChildSupervisor:
                 while True:
                     chunk=await process.stderr.read(4096)
                     if not chunk:return
+                    timing_entries=[]
                     for part in chunk.splitlines(keepends=True):
                         if len(pending)+len(part)>4096:discard=True;pending=b''
                         if not discard:pending+=part
@@ -147,10 +149,21 @@ class ChildSupervisor:
                             if not discard:
                                 if handle.child_error is None:handle.child_error=parse(pending)
                                 _forward_engine_timing(pending.decode('utf-8',errors='replace'))
-                                if self._timing_sink is not None:
+                                if self._timing_sink is not None or self._timing_batch_sink is not None:
                                     observed=engine_timing_stage(pending.decode('utf-8',errors='replace'))
-                                    if observed is not None:self._timing_sink(*observed)
+                                    if observed is not None:timing_entries.append(observed)
                             pending=b'';discard=False
+                    # Flush what arrived now. No timer and no waiting for another stage or the answer to finish.
+                    if timing_entries:
+                        try:
+                            if self._timing_batch_sink is not None:self._timing_batch_sink(timing_entries)
+                            else:
+                                for observed in timing_entries:self._timing_sink(*observed)
+                        except Exception as error:
+                            handle.timing_error=error;handle.timing_failed.set()
+                            from .diagnostic_evidence import failure
+                            failure('child.engine_timing.persistence_failed')
+                            raise ChildRunError('engine timing persistence failed') from error
             handle.stderr_task=asyncio.create_task(drain_stderr())
             child.close();handle.child_sock=None
             if config_child is not None:
@@ -207,6 +220,7 @@ class ChildSupervisor:
             await self._send_frame(handle,frame,fds)
         stop_task=asyncio.create_task(stop.wait()) if stop is not None else None
         handle.stop_task=stop_task
+        timing_failure=asyncio.create_task(handle.timing_failed.wait())
         async def receive():
             while True:
                 try:raw=await reader.readline()
@@ -246,7 +260,8 @@ class ChildSupervisor:
                     return
         receive_task=asyncio.create_task(receive());handle.receive_task=receive_task
         try:
-            done,_=await asyncio.wait([receive_task]+([stop_task] if stop_task else []),timeout=timeout_seconds,return_when=asyncio.FIRST_COMPLETED)
+            done,_=await asyncio.wait([receive_task,timing_failure]+([stop_task] if stop_task else []),timeout=timeout_seconds,return_when=asyncio.FIRST_COMPLETED)
+            if handle.timing_error is not None:raise ChildRunError('engine timing persistence failed') from handle.timing_error
             if not done:raise ChildRunError('child deadline exceeded; no automatic replay')
             if stop_task in done:
                 persist_stop(operation)  # Failure here still reaps, never signals before fence.
@@ -255,7 +270,7 @@ class ChildSupervisor:
                 except asyncio.TimeoutError:raise ChildRunError('child did not stop cooperatively')
             else:await receive_task
         finally:
-            for task in (receive_task,stop_task):
+            for task in (receive_task,stop_task,timing_failure):
                 if task is not None and not task.done():
                     task.cancel()
                     try:await task
@@ -289,6 +304,7 @@ class ChildSupervisor:
                     handle.stderr_task.cancel()
                     try:await handle.stderr_task
                     except BaseException:pass
+                # Cleanup still finishes before a failed sink is surfaced below. Never report a dropped timing write as success.
             if failed and self.last_result is not None:
                 from .diagnostic_evidence import bound,record
                 code=self.last_result.returncode
@@ -313,6 +329,7 @@ class ChildSupervisor:
                 if isinstance(failure_error,ChildRunError):
                     failure_error.args=(str(failure_error)+'; '+detail,)
             self.active=False
+        if handle.timing_error is not None:raise ChildRunError('engine timing persistence failed') from handle.timing_error
         return self.last_result
 
     async def run(self,operation,*,authorize,on_event=lambda event:None,timeout_seconds=3600,stop=None,persist_stop=None,private_config=None,descriptors=None):
