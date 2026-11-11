@@ -20,6 +20,7 @@ def answer_workspace(pg_workspace_factory):
         try:yield w,job
         finally:
             with w.admin() as c:
+                c.execute('DELETE FROM retail_contributions WHERE job_id=%s',(job,))
                 c.execute('DELETE FROM answer_charge_usage WHERE owner_id=%s',(w.scope.owner_id,))
                 c.execute('DELETE FROM answer_charge_receipts WHERE owner_id=%s',(w.scope.owner_id,))
 
