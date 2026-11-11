@@ -12,7 +12,7 @@ from pathlib import Path
 from delivery_api.debug_export import redact
 p=argparse.ArgumentParser();p.add_argument('--code',default='manual');p.add_argument('--step',default='');p.add_argument('--run-dir',default='');args=p.parse_args()
 root=Path(__file__).resolve().parents[2];target=root/'runs'/'preview-debug';target.mkdir(parents=True,exist_ok=True)
-home=Path.home();missing=[]
+home=Path.home();missing=[];skipped=[]
 LIMIT=200000
 # Evidence names are explicit. Never open arbitrary files in a run directory:
 # preview-container.env/service.env and future credentials do not belong in ZIPs.
@@ -86,7 +86,7 @@ repo_facts=repos();run_dir=pick_run_dir();names=containers()
 rebuild_state=home/'.local/share/requi/rebuild/state.json'
 if not rebuild_state.is_file():rebuild_state=None;missing.append('no rebuild state at '+str(home/'.local/share/requi/rebuild/state.json'))
 facts={'captured_at':now.isoformat(),'failure_code':args.code,'step':args.step,'delivery_head':repo_facts.get('delivery-api',{}).get('head',''),'repos':repo_facts,
-       'run_dir':str(run_dir) if run_dir else None,'containers':names,'missing':missing,
+       'run_dir':str(run_dir) if run_dir else None,'containers':names,'missing':missing,'skipped':skipped,
        'omissions':['No settings/env/credentials/argv or database data read','docker inspect contributes name/image/status/started_at/exit_code/error only - never Env or Mounts','Logs are bounded tails; rotated-away output cannot be recovered']}
 path=target/('preview-'+now.strftime('%Y%m%dT%H%M%S%fZ')+'.zip')
 fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
@@ -100,10 +100,20 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
             if not f.is_symlink() and f.is_file():z.writestr('run/'+run_dir.name+'/'+f.name,clean(tail(f)))
     if rebuild_state:z.writestr('rebuild-state.json',clean(tail(rebuild_state)))
     if names:
-        z.writestr('containers.txt','\n'.join(clean(read(['docker','inspect','--format',INSPECT,n])) for n in names))
+        inspected={n:read(['docker','inspect','--format',INSPECT,n]) for n in names}
+        z.writestr('containers.txt','\n'.join(clean(inspected[n]) for n in names))
         answer_traces=[]
         for n in names:
             z.writestr('docker-'+n+'.log',clean(read(['docker','logs','--tail','300',n])))
+            try:status=json.loads(inspected[n]).get('status')
+            except (ValueError,TypeError,AttributeError):status=None
+            if status in ('exited','created','dead','removing','paused'):
+                reason='skipped, stopped' if status!='paused' else 'skipped, paused'
+                skipped.append({'container':n,'reason':reason,'status':status})
+                for label in ('client-navigation','answer-diagnostics'):
+                    z.writestr(label+'-'+n+'.json',json.dumps({'omitted':label,'reason':reason,'status':status}))
+                answer_traces.append('CONTAINER '+n+'\n'+reason)
+                continue
             navigation=read(['docker','exec',n,'python','-c','import json; from delivery_api.process_logs import navigation_export; print(json.dumps(navigation_export()))'],source='client navigation '+n)
             z.writestr('client-navigation-'+n+'.json',clean_json(navigation,'client navigation '+n))
             trace=read(['docker','exec',n,'python','-c','from delivery_api.answer_trace import exported_lines; print(exported_lines())'],source='answer traces '+n)
@@ -115,5 +125,6 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
     # Write after collection so failures discovered during docker exec appear
     # in the ZIP as well as on stderr. A ZIP is not evidence of full capture.
     z.writestr('facts.json',json.dumps(facts,indent=2))
+for item in skipped:print('SKIPPED: '+item['container']+': '+item['reason'],file=sys.stderr)
 for m in missing:print('MISSING: '+m,file=sys.stderr)
 print('Debug ZIP: '+str(path));print('Failure: '+args.code+'; step: '+args.step+'; build: '+facts['delivery_head'])
