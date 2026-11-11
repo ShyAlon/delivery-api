@@ -206,3 +206,12 @@ def test_underflow_is_atomic_not_partial_charge(answer_workspace):
     with w.admin() as c:
         assert c.execute('SELECT count(*) FROM answer_charge_usage WHERE owner_id=%s',(w.scope.owner_id,)).fetchone()==(0,)
         assert c.execute('SELECT state FROM answer_charge_receipts WHERE owner_id=%s',(w.scope.owner_id,)).fetchone()==('pending',)
+
+
+def test_retry_that_created_a_new_job_still_returns_original_input_receipt(answer_workspace):
+    w,j=answer_workspace;r=begin(w,j)
+    with tenant_context(w.scope):
+        task=w.store.worker_job(j)['task_id']
+        second=w.store.enqueue_worker(task,'phase:intent')
+    assert begin(w,second,aid='new-job-request')==r
+    assert balance(w)==(900000000,Decimal(0))

@@ -10,3 +10,6 @@ Tests failed first with the pricing module absent and DB functions absent. Restr
 
 ## What not to claim
 This additive migration and pure module do not activate a runtime path. Job enqueue/claim/input identity, per-attempt bypass, bulk retail display projections, publication CAS, summary logging and legacy/new cutover are subsequent integration. Current functions require an already valid owned job; they do not create or claim one. No endpoint calls them. Production schema application is owner-run, not a test side effect. Stats include all receipts, not just overruns; missing actual remains unknown with E retained.
+
+
+Review found that the same answer retry may enqueue another job before finding its receipt. Job+input uniqueness was too narrow. A new regression failed first, then the receipt key became owner+session+generation+original input, retaining the original job as the execution anchor. The runtime must reuse that original job; a duplicate receipt must never authorize the newly enqueued replacement to run separately.
