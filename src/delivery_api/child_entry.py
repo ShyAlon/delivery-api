@@ -110,6 +110,10 @@ def main():
     from interview_engine.tenant_worker import _root
     root_token=_root.set(root)
     pool=None;progress_channel=None
+    wire_trace=None
+    if cfg.get('answer_trace'):
+        from .answer_trace import WireTrace
+        wire_trace=WireTrace();wire_trace.install()
     try:
         if stop.is_set():raise RuntimeError('parent stopped before dispatch')
         event('running')
@@ -143,6 +147,7 @@ def main():
                         with measured_work(compute) if compute is not None else nullcontext():
                             warm_handle,_=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
                                 load_request=req,load_answer=ans)
+                        if wire_trace is not None:wire_trace.emit(op.operation_id)
                         event('stopped' if stop.is_set() else 'completed')
                         # Follow-up operations on the held session: each frame
                         # carries its own private broker/compute descriptors,
@@ -159,6 +164,7 @@ def main():
                                 current[0]=op2
                                 broker2=BrokerClient(fdmap['broker'],next_call_id=broker_call_id)
                                 compute2=ComputeClient(fdmap['compute']) if 'compute' in fdmap else None
+                                if wire_trace is not None:wire_trace.reset()
                                 event('running')
                                 try:
                                     req2,ans2=loaders(payload.get('input'),payload.get('input_ref'),op2.operation.kind)
@@ -169,6 +175,7 @@ def main():
                                 finally:
                                     broker2.close()
                                     if compute2 is not None:compute2.close()
+                                if wire_trace is not None:wire_trace.emit(op2.operation_id)
                                 event('stopped' if stop.is_set() else 'completed')
                             finally:
                                 for fd in fds:
@@ -191,8 +198,12 @@ def main():
         if gone.is_set() and not warm:raise RuntimeError('parent lost after dispatch')
         # A warm child emits per-operation terminal events inside its loop;
         # after the loop the parent reaps by STOP or descriptor close.
-        if not warm:event('stopped' if stop.is_set() else 'completed')
+        if not warm:
+            if wire_trace is not None:wire_trace.emit(op.operation_id)
+            event('stopped' if stop.is_set() else 'completed')
     finally:
+        if wire_trace is not None:
+            wire_trace.emit(current[0].operation_id);wire_trace.restore()
         if progress_channel is not None:progress_channel.close()
         if pool is not None:pool.close()
         _root.reset(root_token);broker.close()

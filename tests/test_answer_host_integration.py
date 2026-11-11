@@ -52,7 +52,7 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
         with pg_workspace_factory() as w,tenant_context(w.scope):
             with w.admin() as c:c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,1000000000,1000000000,0)',(w.scope.owner_id,))
             tid=w.store.create_task('two-touch real graph')['task_id'];sid=str(uuid.uuid4());w.store.set_engine_session(tid,sid)
-            command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src')]
+            command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[1]/'src'),str(Path(__file__).parents[2]/'interview-engine/src')]
             client=ChildInterviewClient(w.store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),
                 dsn=w.dsn.replace('user=sandbox','user=delivery_app'),endpoint=endpoint,command=command,
                 paid_runtime=Runtime(models={'deepseek':'deepseek-flash'},api_key='fake-parent-only'),answer_accounting=AnswerAccountingMode())
@@ -84,8 +84,19 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
             else:
                 result=submit();assert result.snapshot.sequence>start.snapshot.sequence
             postgres_scope.request_stats.reset(token)
-            print('PARENT_ANSWER_TRACE',outcome,sum(e[3] for e in stats.trace),stats.transactions,stats.trace)
+            print('PARENT_ANSWER_TRACE',outcome,sum(e[3] for e in stats.trace),stats.transactions)
             assert len(calls)>call_count
+            trace=getattr(client,'_last_answer_trace',{'total_syncs':None,'child':None})
+            print('ANSWER_TOTAL',outcome,trace['total_syncs'],sum(v['syncs'] for v in trace['child']['callers'].values()) if trace['child'] else None)
+            from delivery_api.answer_trace import exported_lines
+            assert 'answer.trace' in exported_lines() and sid in exported_lines()
+            assert '"field":"estimate_units"' in exported_lines()
+            assert '"category":"callers"' in exported_lines()
+            for line in exported_lines().splitlines():json.loads(line[len('answer.trace '):])
+            if outcome=='success':
+                assert trace['child']['complete']
+                assert sum(v['syncs'] for v in trace['child']['callers'].values())>0
+                assert trace['total_syncs']>trace['parent']['syncs']
             assert legacy==legacy_before
             assert 'requi_answer_start' in payments[0]
             if outcome=='success':assert len(payments)==2 and 'requi_answer_finish' in payments[1]

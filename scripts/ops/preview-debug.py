@@ -79,6 +79,11 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
     if rebuild_state:z.writestr('rebuild-state.json',clean(tail(rebuild_state)))
     if names:
         z.writestr('containers.txt','\n'.join(clean(read(['docker','inspect','--format',INSPECT,n])) for n in names))
-        for n in names:z.writestr('docker-'+n+'.log',clean(read(['docker','logs','--tail','300',n])))
+        answer_traces=[]
+        for n in names:
+            z.writestr('docker-'+n+'.log',clean(read(['docker','logs','--tail','300',n])))
+            trace=read(['docker','exec',n,'python','-c','from delivery_api.answer_trace import exported_lines; print(exported_lines())'])
+            answer_traces.append('CONTAINER '+n+'\n'+trace)
+        z.writestr('answer-traces.jsonl',clean('\n'.join(answer_traces)))
 for m in missing:print('MISSING: '+m,file=sys.stderr)
 print('Debug ZIP: '+str(path));print('Failure: '+args.code+'; step: '+args.step+'; build: '+facts['delivery_head'])

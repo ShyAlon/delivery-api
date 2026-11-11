@@ -19,6 +19,10 @@ def _fake_subprocess_run(command, **kwargs):
         return SimpleNamespace(stdout=' M dirty.txt\n')
     if command[:2] == ['docker', 'ps']:
         return SimpleNamespace(stdout='requi-preview-exec\nrequi-preview-exec-b3\nunrelated\n')
+    if command[:2] == ['docker', 'exec']:
+        assert command[3:5]==['python','-c']
+        assert command[5]=='from delivery_api.answer_trace import exported_lines; print(exported_lines())'
+        return SimpleNamespace(stdout='answer.trace {"total_syncs":199,"source":"child"}\n')
     if command[:2] == ['docker', 'logs']:
         return SimpleNamespace(stdout='postgresql://private:secret@db/x\nBearer secret123456\nAPI_KEY=another-secret\n')
     if command[:2] == ['docker', 'inspect']:
@@ -84,6 +88,8 @@ def test_the_bundle_carries_run_dir_docker_and_host_evidence_scrubbed(owner_mach
                     'run/413a76bd7770f2da551e65a7/browser-smoke.log',
                     'docker-requi-preview-exec.log', 'docker-requi-preview-exec-b3.log'} <= names
             assert not any('unrelated' in n for n in names), 'only requi-preview-exec* containers are collected'
+            assert b'199' in z.read('answer-traces.jsonl')
+            assert b'child' in z.read('answer-traces.jsonl')
             facts = json.loads(z.read('facts.json'))
             assert facts['failure_code'] == 'PIN' and facts['run_dir'].endswith('413a76bd7770f2da551e65a7')
             assert facts['repos']['delivery-api']['head'] == 'fakehead-delivery-api'

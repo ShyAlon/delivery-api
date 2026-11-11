@@ -45,10 +45,13 @@ class ChildInterviewClient(EngineClient):
         self.store=store;self.base=Path(artifacts_base);self.gateway_factory=gateway_factory;self.dsn=dsn;self.endpoint=endpoint
         from interview_engine.question_config import ConfigStore
         self.quality_store=ConfigStore(__import__('os').environ.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG') or self.base/'question_quality.json')
-        self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'],timing_sink=self._record_engine_timing,timing_batch_sink=self._record_engine_timings)
+        self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'],timing_sink=self._record_engine_timing,timing_batch_sink=self._record_engine_timings,trace_sink=self._record_answer_trace)
         # Parked warm children keyed by session id: a verified completed answer
         # on a session waiting for the next input keeps its claimed child alive.
         self._warm={}
+        self._answer_traces={}
+        self._answer_trace_ready={}
+        self._active_answers={}
         # One persistent supervisor loop: a parked warm child's process and
         # stream transports are loop-bound, so every supervisor interaction
         # (spawn, follow-up, reap, recycle) must run on the loop that spawned it.
@@ -76,6 +79,19 @@ class ChildInterviewClient(EngineClient):
         except RuntimeError:pass  # a stopped loop owns teardown; process exit kills the group
         ctx=entry.get('progress_ctx')
         if ctx is not None:ctx.__exit__(None,None,None)
+    def _record_answer_trace(self,row):
+        if not isinstance(row,dict) or set(row)-{'operation_id','caller','waits','syncs','duration_ms','complete'}:return
+        op=row.get('operation_id')
+        if not isinstance(op,str) or op not in self._answer_traces:return
+        value=self._answer_traces[op]
+        if 'complete' in row:
+            if type(row['complete']) is not bool:return
+            value['complete']=row['complete']
+            self._answer_trace_ready[op].set();return
+        if not isinstance(row.get('caller'),str) or len(row['caller'])>300:return
+        if any(type(row.get(k)) not in (int,float) or row[k]<0 for k in ('waits','syncs','duration_ms')):return
+        value['callers'][row['caller']]={k:row[k] for k in ('waits','syncs','duration_ms')}
+
     def _record_engine_timing(self,session_id,stage,label,status):
         task_id=self.store.task_for_engine_session(session_id)
         if not task_id:return
@@ -215,11 +231,39 @@ class ChildInterviewClient(EngineClient):
             return StartSessionResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.RUN_STARTED))
     def submit(self,sid,response):
         from vmodel_contracts.interactive import SubmitInputResponse,EventType
-        if self.answer_accounting is None or not self.answer_accounting.replay(self.store,sid,response):
+        if self.answer_accounting is None:
             self._execute(sid,response=response)
-        with self._registry() as registry:
-            session=registry.get(sid,serve=False)
-            return SubmitInputResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.INPUT_ACCEPTED))
+            with self._registry() as registry:
+                session=registry.get(sid,serve=False)
+                return SubmitInputResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.INPUT_ACCEPTED))
+        from .postgres_scope import RequestStats,request_stats
+        from .answer_trace import tables,flush
+        stats=request_stats.get();token=None
+        if stats is None:stats=RequestStats();token=request_stats.set(stats)
+        first=len(stats.trace);began=time.monotonic();error=None
+        try:
+            if not self.answer_accounting.replay(self.store,sid,response):self._execute(sid,response=response)
+            with self._registry() as registry:
+                session=registry.get(sid,serve=False)
+                return SubmitInputResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.INPUT_ACCEPTED))
+        except BaseException as exc:
+            error=type(exc).__name__;raise
+        finally:
+            run=self._active_answers.pop(sid,None)
+            if run is not None:
+                try:run.finish()
+                except Exception:pass  # Preserve original error; receipt remains the durable accounting truth.
+                job=run.receipt['job_id'];child=self._answer_traces.pop(job,None)
+                parent=tables(stats.trace[first:])
+                self._last_answer_trace={'job_id':job,'session_id':sid,'duration_ms':round((time.monotonic()-began)*1000),
+                    'parent':parent,'child':child,'accounting':run.summary(),'error_class':error,
+                    'total_syncs':parent['syncs']+sum(v['syncs'] for v in child['callers'].values()) if child and child['complete'] else None}
+                try:flush(self._last_answer_trace)
+                except Exception:
+                    from .diagnostic_evidence import failure
+                    failure('answer.trace.flush_failed')
+                self._answer_trace_ready.pop(job,None)
+            if token is not None:request_stats.reset(token)
     def _execute(self,sid,*,request=None,response=None):
         from .tenancy import current_scope
         from .child_operation_refs import ChildOperationRefs
@@ -360,10 +404,15 @@ class ChildInterviewClient(EngineClient):
                 import httpx
                 gateway=self.gateway_factory(capability,job_id)
                 if getattr(gateway,'retail_rates',None) is not None and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
+                trace_started=time.monotonic()
+                if self.answer_accounting is not None:
+                    self._answer_traces[job_id]={'complete':False,'callers':{}}
+                    self._answer_trace_ready[job_id]=asyncio.Event()
                 input_payload=refs.get(ref,ref_kind)
                 answer_run=None
                 if self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek':
                     answer_run=self.answer_accounting.begin(self.store,operation,input_payload,gateway)
+                    self._active_answers[sid]=answer_run
                 journal=None if answer_run is not None else ChildBrokerJournal(self.store,operation)
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(task_id,'child-job:'+job_id,'compute:'+str(operation.binding.lease_epoch),value))
                 if answer_run is not None:
@@ -380,7 +429,7 @@ class ChildInterviewClient(EngineClient):
                 cfg={'version':1,'provider':operation.binding.provider,'binding':operation.binding.model_dump(mode='json'),
                     'dsn':self.dsn,'owner_root':str(owner_root),'input_ref':ref,
                     'input':input_payload,'question_quality':self.question_quality_config()['config'],
-                    'warm':ref_kind in ('answer','route')}
+                    'warm':ref_kind in ('answer','route'),'answer_trace':answer_run is not None}
                 stop=asyncio.Event()
                 from .stop_watch import watch_for_stop
                 watcher=asyncio.create_task(watch_for_stop(store=self.store,task_id=task_id,session_id=sid,generation=operation.binding.generation,stop=stop))
@@ -442,7 +491,18 @@ class ChildInterviewClient(EngineClient):
                 # Both descriptor receivers have drained before the one correction.
                 # Unknown provider/compute evidence retains E, never fabricates a refund.
                 try:
-                    if answer_run is not None:answer_run.finish()
+                    if answer_run is not None:
+                        answer_run.finish()
+                        try:await asyncio.wait_for(self._answer_trace_ready[job_id].wait(),1)
+                        except asyncio.TimeoutError:pass  # Diagnostics missing is not a work deadline or a zero count.
+                        from .answer_trace import tables
+                        from .postgres_scope import request_stats
+                        stats=request_stats.get();child_trace=self._answer_traces.get(job_id)
+                        parent_trace=tables(stats.trace) if stats else None
+                        self._last_answer_trace={'job_id':job_id,'task_id':task_id,'session_id':sid,
+                            'duration_ms':round((time.monotonic()-trace_started)*1000),
+                            'parent':parent_trace,'child':child_trace,'accounting':answer_run.summary(),
+                            'total_syncs':parent_trace['syncs']+sum(v['syncs'] for v in child_trace['callers'].values()) if parent_trace and child_trace and child_trace['complete'] else None}
                 except BaseException:
                     watcher.cancel()
                     try:await watcher

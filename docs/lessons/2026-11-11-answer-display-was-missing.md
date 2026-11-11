@@ -17,3 +17,13 @@ Explicit internal injection into ChildInterviewClient now passes real paid-route
 The first parent-only measured successful answer was95-98 Syncs (timing chunk arrivals vary),30-31transactions, before deduplicating one input-ref read. Child persistence is additional and not counted by that number. The estimated10-17total budget was wrong for this initial wiring. Payment-only two Sync proof is not a whole-answer proof. Remaining repeats include input/operation retention, job/claim/capability validation, multiple timing chunks and completion/publication. Do not publish this branch as a finished candidate.
 
 Parent relayed the user's university constraint and request for a complete locally proven candidate, one migration/apply+rebuild command and one-file debug trace including parent+child per-answer phases/callers, E/A/delta/unknowns. These remain unfinished, not user steps to try now.
+
+## Instrumented whole-answer boundary
+
+The parent-only trace was incomplete. Optional child instrumentation now wraps psycopg waits and counts actual frontend Sync and simple Query messages, including BEGIN/COMMIT and pool checks. Raw protocol bytes live only in an anonymous memory fd while the wait runs, then are discarded. Only caller/count/duration survive. Missing instrumentation is unknown, never zero, and failure to allocate the trace fd does not break DB work.
+
+A child must load the exact checked-out delivery source in integration tests: the private launch intentionally excludes PYTHONPATH. The new test explicitly inserts this branch's src as well as the sibling engine source. Otherwise the child silently used the editable baseline and emitted no new trace.
+
+One initial fully observed fake-provider success was199combined Syncs:92parent+107child. Missingusage198, Stop188, refusal162. Arrival chunking varies the parent count. These are measured local samples, not remote pooler latency. The target<30is NOT reached. The new final record includes all submit completion work, not the premature pre-publication snapshot.
+
+Final per-answer rows flush to the existing bounded engine log in memory-queue batches, never DB. Short JSON rows preserve validity under the600character log bound, use a UUID correlation id rather than bypassing the log's hex-secret scrubber, and include summary/accounting, parent phase/caller and child phase/caller rows. req debug collects them into answer-traces.jsonl in its oneZIP; the simulated Mac export test proves that entry. Evidence can still rotate away; missing rows are not recovered.
