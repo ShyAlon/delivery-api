@@ -1,3 +1,4 @@
+import {activationAllowed} from './pointer-activation.js';
 import {mountOperationStatus} from './operation-status.js';
 /* One dialog lifecycle for native private pages and customer overlay content. */
 import {logEnter,runAction} from './ui-action.js';
@@ -73,6 +74,6 @@ static confirm({title,message,label,run,statusLabel=null}){const dialog=createDi
   bindDialog(dialog,{...options,close});dialog?.querySelector('.dialog-x')?.addEventListener('click',close);
   Dialog.backdrop(host,close);return dialog;
  }
- static backdrop(host,close){host.onclick=e=>{if(e.target===host||e.target.classList.contains('dialog-shell'))close()}}
+ static backdrop(host,close){host.onclick=e=>{if((e.target===host||e.target.classList.contains('dialog-shell'))&&activationAllowed(e,{backdrop:true}))close()}}
  static push(host,html){Dialog.styles();const layer=document.createElement('div');layer.className='dialog-layer';layer.innerHTML=html;host.append(layer);host.classList.remove('hidden');return layer}
 }

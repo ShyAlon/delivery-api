@@ -1,3 +1,4 @@
+import {activationAllowed} from './pointer-activation.js';
 import {Dialog} from './shared-dialog.js';
 import {api,esc,reveal} from './client-core.js';
 import {navigate} from './spa-router.js';
@@ -23,7 +24,7 @@ async function dashboard(){
   const q=taskFilter.trim().toLowerCase();let shown=tasks.filter(t=>!q||t.title.toLowerCase().includes(q)||(t.brief||'').toLowerCase().includes(q)||stateLabel(t.state).toLowerCase().includes(q));
   shown.sort((a,b)=>taskSort==='name-asc'?a.title.localeCompare(b.title):taskSort==='name-desc'?b.title.localeCompare(a.title):taskSort==='created-asc'?a.created_at-b.created_at:b.updated_at-a.updated_at);
   document.querySelector('.task-grid').innerHTML=shown.map(t=>`<article class="task" data-open="${esc(t.task_id)}"><div class="top"><span class="state ${t.state}"><i class="pulse"></i>${stateLabel(t.state)}</span><span><button class="card-action rename" data-id="${esc(t.task_id)}">Rename</button><button class="card-action delete" data-id="${esc(t.task_id)}">Delete</button></span></div><h2>${esc(t.title)}</h2><div class="meta">${esc(t.brief||'No brief yet')}</div>${vmap(t.phases,t.gates,t.task_id)}<div class="foot"><span>${t.phases.filter(p=>['approved','done'].includes(p.state)).length} / ${t.phases.length} approved phases</span><span>${t.artifact_count} artifacts →</span></div></article>`).join('')||`<p class="task-empty">${q?'No tasks match this filter.':'No tasks yet. Create one to begin.'}</p>`;
-  document.querySelectorAll('[data-open]').forEach(el=>el.onclick=()=>navigate(`/tasks/${el.dataset.open}/view`));
+  document.querySelectorAll('[data-open]').forEach(el=>el.onclick=e=>{if(activationAllowed(e))navigate(`/tasks/${el.dataset.open}/view`)});
   document.querySelectorAll('.rename').forEach(el=>el.onclick=e=>{e.stopPropagation();showRename(tasks.find(t=>t.task_id===el.dataset.id))});
   document.querySelectorAll('.delete').forEach(el=>el.onclick=e=>{e.stopPropagation();showDelete(tasks.find(t=>t.task_id===el.dataset.id))});
   bindGates(shown);

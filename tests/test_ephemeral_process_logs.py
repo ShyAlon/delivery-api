@@ -84,3 +84,16 @@ def test_file_rotation_stays_bounded_and_disk_failure_is_visible(monkeypatch,fil
     monkeypatch.setattr(process_logs.FileLogs,'append',lambda *a,**k:(_ for _ in ()).throw(OSError('private')))
     process_logs.emit('activity','disk failed');assert process_logs.flush(3)
     assert log_durability.snapshot()['sources'][0]['source']=='process-files'
+
+
+def test_navigation_export_reads_only_bounded_retained_activity(tmp_path,monkeypatch):
+    from delivery_api import process_logs as logs
+    monkeypatch.setattr(logs,'root',lambda:tmp_path)
+    store=logs.FileLogs()
+    store.append('activity','client.ui.activation Selection gesture ignored target=input',ts=1)
+    store.append('activity','ordinary task event',ts=2)
+    store.append('activity','client.navigation.caller router.navigate dashboard.js',ts=3)
+    before={p.name:p.read_bytes() for p in tmp_path.iterdir()}
+    result=logs.navigation_export()
+    assert len(result['records'])==2 and not result['unreadable']
+    assert before=={p.name:p.read_bytes() for p in tmp_path.iterdir()}

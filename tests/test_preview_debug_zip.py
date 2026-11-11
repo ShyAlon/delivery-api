@@ -21,6 +21,8 @@ def _fake_subprocess_run(command, **kwargs):
         return SimpleNamespace(stdout='requi-preview-exec\nrequi-preview-exec-b3\nunrelated\n')
     if command[:2] == ['docker', 'exec']:
         assert command[3:5]==['python','-c']
+        if command[5]=='import json; from delivery_api.process_logs import navigation_export; print(json.dumps(navigation_export()))':
+            return SimpleNamespace(stdout='{"records":[{"text":"client.ui.activation Selection gesture ignored"}],"truncated":false,"unreadable":[]}')
         if command[5]=='from delivery_api.answer_diagnostics import exported_json; print(exported_json())':
             return SimpleNamespace(stdout='{"kind":"diagnostic-only-not-execution-replay","records":[]}')
         assert command[5]=='from delivery_api.answer_trace import exported_lines; print(exported_lines())'
@@ -91,6 +93,7 @@ def test_the_bundle_carries_run_dir_docker_and_host_evidence_scrubbed(owner_mach
                     'docker-requi-preview-exec.log', 'docker-requi-preview-exec-b3.log'} <= names
             assert not any('unrelated' in n for n in names), 'only requi-preview-exec* containers are collected'
             assert json.loads(z.read('answer-diagnostics-requi-preview-exec.json'))['kind']=='diagnostic-only-not-execution-replay'
+            assert b'client.ui.activation' in z.read('client-navigation-requi-preview-exec.json')
             assert b'199' in z.read('answer-traces.jsonl')
             assert b'child' in z.read('answer-traces.jsonl')
             facts = json.loads(z.read('facts.json'))

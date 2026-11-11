@@ -98,6 +98,8 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
         answer_traces=[]
         for n in names:
             z.writestr('docker-'+n+'.log',clean(read(['docker','logs','--tail','300',n])))
+            navigation=read(['docker','exec',n,'python','-c','import json; from delivery_api.process_logs import navigation_export; print(json.dumps(navigation_export()))'],source='client navigation '+n)
+            z.writestr('client-navigation-'+n+'.json',clean_json(navigation,'client navigation '+n))
             trace=read(['docker','exec',n,'python','-c','from delivery_api.answer_trace import exported_lines; print(exported_lines())'],source='answer traces '+n)
             if not trace.strip():missing.append('answer traces '+n+': no retained trace rows')
             answer_traces.append('CONTAINER '+n+'\n'+trace)
