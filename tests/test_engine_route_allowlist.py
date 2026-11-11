@@ -31,6 +31,9 @@ def post(c,path):return c.post(path,headers={'Authorization':'Bearer a'})
 
 
 def test_every_route_stays_blocked_while_the_engine_is_not_installed(monkeypatch):
+    # A previous startup failure is not part of this isolated readiness case.
+    monkeypatch.setattr(cloud_runtime,'_failure',None)
+    monkeypatch.setattr(cloud_runtime,'_failure_code',None)
     monkeypatch.setattr(cloud_runtime,'_state',None)
     with client() as c:
         for path in OPENED+STILL_BLOCKED:

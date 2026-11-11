@@ -68,7 +68,12 @@ def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=No
         from .child_interview import ChildInterviewHost
         endpoint=(environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').rstrip('/')+'/chat/completions'
         engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
-        host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
+        from .answer_mode import from_environment
+        answer_mode=from_environment(environ,paid_runtime)
+        if answer_mode is not None:
+            from .answer_mode import check_installed_schema
+            check_installed_schema(session_dsn)
+        host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime,answer_accounting=answer_mode)
         client=host.client()
     except BaseException as exc:
         if gateways is not None:gateways.close()

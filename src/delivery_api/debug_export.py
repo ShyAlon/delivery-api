@@ -12,7 +12,7 @@ def redact(value):
  if isinstance(value,dict):return {k:('[REDACTED]' if SENSITIVE.search(k) else redact(v)) for k,v in value.items()}
  if isinstance(value,list):return [redact(v) for v in value]
  if isinstance(value,str):
-  text=BEARER.sub('Bearer [REDACTED]',SECRET_TEXT.sub(r'\1[REDACTED]',value))
+  text=SECRET_TEXT.sub(r'\1[REDACTED]',BEARER.sub('Bearer [REDACTED]',value))
   for name,secret in os.environ.items():
    if SENSITIVE.search(name) and len(secret)>=8:text=text.replace(secret,'[REDACTED]')
   return text

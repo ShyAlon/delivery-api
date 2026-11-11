@@ -20,7 +20,8 @@ def test_installer_rejects_missing_pins_before_any_dispatch(store,tmp_path):
     assert chosen==[] and not cloud_runtime.installed()
 
 
-def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_path,monkeypatch):
+@pytest.mark.parametrize('answer_mode',['default','legacy','answer-v1'])
+def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_path,monkeypatch,answer_mode):
     import asyncio,json,sys,threading
     from pathlib import Path
     from http.server import BaseHTTPRequestHandler,HTTPServer
@@ -55,7 +56,14 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
                 def close(self):pass
             monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:Factory())
             chosen=[]
-            cloud_runtime.install(store,env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN.replace('user=sandbox','user=delivery_app'),VMODEL_ARTIFACTS_DIR=str(tmp_path)),chosen.append,paid_runtime=runtime)
+            config=env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN.replace('user=sandbox','user=delivery_app'),VMODEL_ARTIFACTS_DIR=str(tmp_path))
+            if answer_mode!='default':config['DELIVERY_ANSWER_ACCOUNTING_MODE']=answer_mode
+            # Match startup: installation runs with no authenticated tenant.
+            from delivery_api.tenancy import _scope
+            token=_scope.set(None)
+            try:cloud_runtime.install(store,config,chosen.append,paid_runtime=runtime)
+            finally:_scope.reset(token)
+            assert (chosen[0].answer_accounting is not None)==(answer_mode!='legacy')
             tid=store.create_task('installed child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
             from vmodel_contracts.interactive import StartSessionRequest
             result=chosen[0].start(StartSessionRequest(session_id=sid,task_id=tid,idea='A booking app',model_route='deepseek',initial_model='deepseek-flash'))
@@ -63,4 +71,12 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
             with store._postgres.transaction() as conn:
                 assert conn.execute("SELECT count(*) AS n FROM retail_compute_segments WHERE state='settled'").fetchone()['n']==1
                 assert conn.execute("SELECT count(*) AS n FROM retail_contributions r JOIN worker_jobs w USING(job_id) WHERE r.kind='tokens' AND w.task_id=%s",(tid,)).fetchone()['n']==len(calls)
+            from vmodel_contracts.interactive import InputResponse
+            answer=result.snapshot.open_input
+            chosen[0].submit(sid,InputResponse(input_id=answer.input_id,value='Customers choose a service and time',actor_id='fixture',expected_sequence=result.snapshot.sequence))
+            with store._postgres.transaction() as conn:
+                receipts=conn.execute("SELECT state FROM answer_charge_receipts WHERE session_id=%s",(sid,)).fetchall()
+                assert len(receipts)==(1 if answer_mode!='legacy' else 0)
+                if receipts:assert receipts[0]['state']=='settled'
+
     finally:server.shutdown();server.server_close()

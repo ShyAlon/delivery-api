@@ -34,6 +34,7 @@ class FakeTransaction:
 class FakeConnection:
     def __init__(self,world,dead=False):
         self.world,self.closed,self.dead,self.log=world,False,dead,[]
+        self.autocommit=False  # Match real psycopg connections used by batched BEGIN.
         self.info=types.SimpleNamespace(transaction_status=Status.IDLE)
     def pipeline(self):return __import__("contextlib").nullcontext()
     def transaction(self):return FakeTransaction(self)
