@@ -55,6 +55,7 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
             tid=store.create_task('all-phase '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
             from vmodel_contracts.interactive import StartSessionRequest,InputResponse
             snapshot=client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='A SaaS web app for founders who need specs',model_route='deepseek',initial_model='deepseek-flash')).snapshot
+            submitted=0
             for n in range(12):
                 if not snapshot.open_input:break
                 item=snapshot.open_input
@@ -62,6 +63,7 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
                 if item.kind.name=='CHOICE':value=item.options[0].value
                 if item.kind.name=='APPROVAL':value=1
                 snapshot=client.submit(sid,InputResponse(input_id=item.input_id,expected_sequence=snapshot.sequence,value=value,rationale='First option fits this test.',actor_id=A.owner_id)).snapshot
+                submitted+=1
             assert not snapshot.open_input and not errors,errors
             assert client.supervisor.last_result.reaped
             # Read generated interview documents directly from durable checkpoint publication.
@@ -88,7 +90,12 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
             with store._postgres.transaction() as conn:
                 assert conn.execute("SELECT count(*) AS n FROM retail_contributions r JOIN worker_jobs w USING(job_id) WHERE w.task_id=%s AND r.kind='tokens'",(tid,)).fetchone()['n']==len(calls)
                 segments=conn.execute("SELECT r.state,r.deterministic_ms FROM retail_compute_segments r JOIN worker_jobs w USING(job_id) WHERE w.task_id=%s",(tid,)).fetchall()
-                assert len(segments)>=9 and all(r['state']=='settled' and r['deterministic_ms']>0 for r in segments)
+                # Default answer-v1 replaces per-answer compute segments with
+                # final receipts. Start plus six generator phases keep segments.
+                assert len(segments)==7 and all(r['state']=='settled' and r['deterministic_ms']>0 for r in segments)
+                receipts=conn.execute("SELECT state,usage_manifest FROM answer_charge_receipts WHERE session_id=%s",(sid,)).fetchall()
+                assert len(receipts)==submitted and submitted>=2
+                assert all(r['state']=='settled' and float(r['usage_manifest']['deterministic_ms'])>0 for r in receipts)
             snapshot=store.manifest_snapshot(tid)
             names={(r['phase_key'],r['name']) for r in snapshot['rows']}
             assert {('intent','intent_model.json'),('conops','conops.json'),('needs','needs.json'),('srs','srs.json'),('architecture','architecture.json'),('specs','items.json'),('tests','tests.json'),('validation','validation.json'),('handoff','findings-ledger.json')} <= names

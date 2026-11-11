@@ -199,6 +199,9 @@ def test_local_clients_are_pinned_to_the_configured_origin(monkeypatch):
 
 def test_execution_readiness_requires_installed_runtime(monkeypatch):
     from delivery_api import cloud_execution,cloud_runtime
+    # A previous startup failure is not part of this isolated readiness case.
+    monkeypatch.setattr(cloud_runtime,'_failure',None)
+    monkeypatch.setattr(cloud_runtime,'_failure_code',None)
     monkeypatch.setattr(cloud_runtime,'_state',None)
     assert cloud_execution.problems(local_env())==['reviewed child runtime is not ready']
 

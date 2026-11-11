@@ -2,6 +2,9 @@ from types import SimpleNamespace
 from delivery_api import app as m,cloud_runtime,cloud_execution
 
 def test_customer_route_api_never_exposes_operator_evidence_even_to_admin(monkeypatch):
+    # A previous startup failure is not part of this isolated readiness case.
+    monkeypatch.setattr(cloud_runtime,'_failure',None)
+    monkeypatch.setattr(cloud_runtime,'_failure_code',None)
     monkeypatch.setattr(m.config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(m,'cloud_execution_admitted',lambda:False)
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)

@@ -5,7 +5,7 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from delivery_api.answer_runtime import AnswerAccountingMode,AnswerReceiptStore
 from delivery_api.child_paid_runtime import PaidChildRuntime
-from delivery_api.child_interview import ChildInterviewClient,LocalComputeEvidence
+from delivery_api.child_interview import ChildInterviewClient,ChildInterviewHost,LocalComputeEvidence
 from delivery_api.retail_pricing import RetailRates
 from delivery_api.tenancy import tenant_context
 
@@ -53,9 +53,12 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
             with w.admin() as c:c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,1000000000,1000000000,0)',(w.scope.owner_id,))
             tid=w.store.create_task('two-touch real graph')['task_id'];sid=str(uuid.uuid4());w.store.set_engine_session(tid,sid)
             command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[1]/'src'),str(Path(os.environ['DELIVERY_TEST_ENGINE_SOURCE'])/'src') if os.getenv('DELIVERY_TEST_ENGINE_SOURCE') else str(Path(__import__('interview_engine').__file__).parents[1])]
-            client=ChildInterviewClient(w.store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),
-                dsn=w.dsn.replace('user=sandbox','user=delivery_app'),endpoint=endpoint,command=command,
-                paid_runtime=Runtime(models={'deepseek':'deepseek-flash'},api_key='fake-parent-only'),answer_accounting=AnswerAccountingMode())
+            from delivery_api.answer_mode import from_environment
+            runtime=Runtime(models={'deepseek':'deepseek-flash'},api_key='fake-parent-only')
+            client=ChildInterviewHost(w.store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),
+                session_dsn=w.dsn.replace('user=sandbox','user=delivery_app'),endpoint=endpoint,
+                paid_runtime=runtime,answer_accounting=from_environment({'DELIVERY_ANSWER_ACCOUNTING_MODE':'answer-v1'},runtime)).client()
+            client.supervisor.command=command
             from vmodel_contracts.interactive import StartSessionRequest,InputResponse
             start=client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='A test app',model_route='deepseek',initial_model='deepseek-flash'))
             assert start.snapshot.open_input is not None

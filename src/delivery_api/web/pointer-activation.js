@@ -17,7 +17,7 @@ export function navigationCall(source){
  clientLog('navigation.caller','Navigation requested',{source,frames});
 }
 // Focus changes can distinguish a dismissed dialog from a route transition.
-for(const kind of ['focusin','focusout'])document.addEventListener(kind,e=>{if(e.target.closest?.('[role="dialog"]'))clientLog('ui.focus',kind,{target:name(e.target),selection:selected()})},true);
+for(const kind of ['focusin','focusout'])document.addEventListener(kind,e=>{if(e.target.closest?.('[role=dialog]'))clientLog('ui.focus',kind,{target:name(e.target),selection:selected()})},true);
 
 // Capture all same-document URL changes, including code outside the router.
 // Preserve native receiver/arguments/return and never record state or URL query.
