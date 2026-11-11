@@ -355,6 +355,9 @@ class ChildInterviewClient(EngineClient):
                 session=registry._restore_payload(payload,sid)
                 snapshot=registry._read_restore(session,payload,check_legacy_pin=False).snapshot()
             if not snapshot.open_input:raise PermissionError('no open child input')
+            if (str(response.input_id)!=str(snapshot.open_input.input_id)
+                or (response.expected_sequence is not None and response.expected_sequence!=snapshot.sequence)):
+                raise PermissionError('answer input or sequence changed before entry')
             pairs={tuple(pair) for pair in (snapshot.model_map or {}).values()}
             if len(pairs)!=1:raise PermissionError('unpinned child answer refused')
             if self.paid_runtime is None and next(iter(pairs))[0]!='ollama':raise PermissionError('paid child answer refused')

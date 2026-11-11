@@ -104,6 +104,10 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
                 assert trace['child']['complete']
                 assert sum(v['syncs'] for v in trace['child']['callers'].values())>0
                 assert trace['total_syncs']>trace['parent']['syncs']
+                next_input=InputResponse(input_id=result.snapshot.open_input.input_id,value='not dispatched',actor_id='fake',expected_sequence=result.snapshot.sequence)
+                for stale in (next_input.model_copy(update={'input_id':uuid.uuid4()}),next_input.model_copy(update={'expected_sequence':result.snapshot.sequence+1})):
+                    with pytest.raises(PermissionError,match='input or sequence changed'):client.submit(sid,stale)
+                assert len(payments)==2,'stale input must fail before another debit/provider request'
             assert legacy==legacy_before
             assert 'requi_answer_start' in payments[0]
             if outcome=='success':assert len(payments)==2 and 'requi_answer_finish' in payments[1]
