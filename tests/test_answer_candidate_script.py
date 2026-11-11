@@ -40,6 +40,8 @@ def test_owner_sequence_applies_only_pending_and_always_collects_proof(tmp_path,
     cmds=[c for c,kw in calls]
     assert sum('apply-pg-cutover.py' in ' '.join(c) and '--apply' in c for c in cmds)==(pending==3)
     assert any(c[-2:]==['rebuild','--apply'] for c in cmds)
+    assert cmds[0][0]=='uv' and '-c' in cmds[0]
+    assert '--check' in cmds[1]
     assert 'answer-proof.py' in ' '.join(cmds[-2])
     assert cmds[-1][-3:-1]==['debug','--run-dir']
     for c,kw in calls:
@@ -75,3 +77,13 @@ def test_free_proof_sanitizes_environment_and_rejects_missing_counts(tmp_path,mo
     assert m.main([str(root),'--output',str(tmp_path/'proof')])==1
     value=json.loads((tmp_path/'proof/answer-proof.json').read_text())
     assert not value['passed'] and value['live_provider_calls']==0
+
+
+def test_missing_proof_dependency_stops_before_schema_or_rebuild(tmp_path,monkeypatch):
+    m,root=fixture(tmp_path,monkeypatch);calls=[]
+    def run(command,**kwargs):
+        calls.append(list(map(str,command)))
+        raise m.Refused('proof dependency failed')
+    monkeypatch.setattr(m,'run',run)
+    with pytest.raises(m.Refused,match='proof dependency failed'):m.main([str(root)])
+    assert len(calls)==1 and calls[0][0]=='uv'

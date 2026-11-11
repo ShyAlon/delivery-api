@@ -78,6 +78,17 @@ def main(argv=None):
     for command in (['docker','version','--format','{{.Server.Version}}'],['gh','auth','status']):
         result=subprocess.run(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
         if result.returncode:raise Refused(command[0]+' preflight failed; no schema apply or rebuild')
+    # Resolve proof prerequisites before any schema writes or rebuild.
+    # Resolve a separate proof environment, not the owner's runtime venv.
+    # The source repos' duplicate wheel URLs are replaced by the one verified
+    # delivery wheel for each contract. These are package installs, not models.
+    proof_prefix=['uv','run','--no-project','--no-sources','--python',root/'.venv/bin/python',
+        '--with-editable',root,'--with-editable',engine,'--with','pytest','--with','pgserver','--with','langchain-ollama',
+        '--with',root/'vendor/vmodel_contracts-0.28.0-py3-none-any.whl',
+        '--with',root/'vendor/requi_child_contract-0.3.0-py3-none-any.whl',
+        'python']
+    proof_env={key:value for key,value in os.environ.items() if key in ('PATH','HOME','LANG','TMPDIR','SYSTEMROOT','SSL_CERT_FILE')}
+    run([*proof_prefix,'-c','import pytest, pgserver, psycopg, interview_engine, delivery_api, langchain_ollama'],root=root,env=proof_env)
     # The reviewed owner migration entry reads this same explicit .env. The
     # exact phrase is requested only when check reports pending work (exit3).
     migration=[sys.executable,root/'scripts/owner/apply-pg-cutover.py',root,'--env-file',root/'.env']
@@ -90,15 +101,7 @@ def main(argv=None):
     run(['bash',root/'scripts/ops/req','rebuild','--apply'],root=root,env=env)
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     output=Path.home()/'.local/share/requi/answer-proof'/stamp;output.mkdir(parents=True,mode=0o700)
-    # Resolve a separate proof environment, not the owner's runtime venv.
-    # The source repos' duplicate wheel URLs are replaced by the one verified
-    # delivery wheel for each contract. These are package installs, not models.
-    proof=['uv','run','--no-project','--no-sources','--python',root/'.venv/bin/python',
-        '--with-editable',root,'--with-editable',engine,'--with','pytest','--with','pgserver','--with','langchain-ollama',
-        '--with',root/'vendor/vmodel_contracts-0.28.0-py3-none-any.whl',
-        '--with',root/'vendor/requi_child_contract-0.3.0-py3-none-any.whl',
-        'python',root/'scripts/owner/answer-proof.py',root,'--output',output]
-    proof_env={key:value for key,value in os.environ.items() if key in ('PATH','HOME','LANG','TMPDIR','SYSTEMROOT','SSL_CERT_FILE')}
+    proof=[*proof_prefix,root/'scripts/owner/answer-proof.py',root,'--output',output]
     code=run(proof,root=root,env=proof_env,allowed=(0,1,2))
     # Always collect the proof table, even when its assertions fail. This read
     # only bundle never triggers paid fallback or changes the recovery spool.
