@@ -5,6 +5,7 @@ CREATE TABLE public.answer_charge_receipts (
  answer_id text PRIMARY KEY CHECK(length(answer_id) BETWEEN 1 AND 128),
  owner_id uuid NOT NULL REFERENCES auth.users(id),
  job_id text NOT NULL REFERENCES public.worker_jobs(job_id),
+ session_id text NOT NULL, generation integer NOT NULL CHECK(generation>0),
  input_id text NOT NULL CHECK(length(input_id) BETWEEN 1 AND 240),
  input_digest text NOT NULL CHECK(input_digest ~ '^[0-9a-f]{64}$'),
  pricing jsonb NOT NULL, estimate_units bigint NOT NULL CHECK(estimate_units>0),
@@ -13,7 +14,7 @@ CREATE TABLE public.answer_charge_receipts (
  actual_units bigint CHECK(actual_units>=0), correction_units bigint,
  fractional_remainder numeric CHECK(fractional_remainder>=0 AND fractional_remainder<1),
  usage_manifest jsonb, overrun boolean, started_at timestamptz NOT NULL DEFAULT clock_timestamp(), settled_at timestamptz,
- UNIQUE(owner_id,job_id,input_id),
+ UNIQUE(owner_id,session_id,generation,input_id),
  CHECK((state='settled')=(usage_manifest IS NOT NULL)),
  CHECK((state='settled')=(actual_units IS NOT NULL AND correction_units IS NOT NULL AND fractional_remainder IS NOT NULL AND overrun IS NOT NULL AND settled_at IS NOT NULL))
 );
@@ -42,7 +43,7 @@ CREATE POLICY answer_usage_owner ON public.answer_charge_usage TO requi_backend
 
 CREATE FUNCTION public.requi_answer_start(p_answer text,p_job text,p_input text,p_digest text,p_pricing jsonb)
 RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$
-DECLARE oid uuid:=auth.uid(); a public.credit_accounts; r public.answer_charge_receipts;
+DECLARE oid uuid:=auth.uid(); a public.credit_accounts; r public.answer_charge_receipts; j public.worker_jobs;
  e numeric; rate numeric; k text; snap jsonb;
 BEGIN
  IF oid IS NULL OR NOT public.requi_session_active() THEN RAISE EXCEPTION 'active authenticated owner required'; END IF;
@@ -50,9 +51,12 @@ BEGIN
     p_digest IS NULL OR p_digest !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'invalid answer identity'; END IF;
  SELECT * INTO a FROM public.credit_accounts WHERE owner_id=oid FOR UPDATE;
  IF NOT FOUND OR a.units_per_credit<>1000000000 THEN RAISE EXCEPTION 'exact prepaid account required'; END IF;
- SELECT * INTO r FROM public.answer_charge_receipts WHERE answer_id=p_answer OR (owner_id=oid AND job_id=p_job AND input_id=p_input);
+ SELECT * INTO j FROM public.worker_jobs WHERE job_id=p_job AND owner_id=oid;
+ IF NOT FOUND THEN RAISE EXCEPTION 'owned answer job required'; END IF;
+ SELECT * INTO r FROM public.answer_charge_receipts WHERE answer_id=p_answer OR
+   (owner_id=oid AND session_id=j.session_id AND generation=j.generation AND input_id=p_input);
  IF FOUND THEN
-   IF r.owner_id<>oid OR r.job_id IS DISTINCT FROM p_job OR r.input_id<>p_input OR r.input_digest<>p_digest THEN RAISE EXCEPTION 'conflicting answer replay'; END IF;
+   IF r.owner_id<>oid OR r.session_id<>j.session_id OR r.generation<>j.generation OR r.input_id<>p_input OR r.input_digest<>p_digest THEN RAISE EXCEPTION 'conflicting answer replay'; END IF;
    -- Current environment/config changes must not reprice an existing receipt.
    RETURN to_jsonb(r);
  END IF;
@@ -77,8 +81,8 @@ BEGIN
      (k='usd_per_credit' AND rate=0) OR (k<>'usd_per_credit' AND rate*1000000000<>trunc(rate*1000000000)) THEN RAISE EXCEPTION 'invalid frozen retail rate'; END IF;
  END LOOP;
  IF a.balance_units<e THEN RAISE EXCEPTION 'insufficient prepaid balance'; END IF;
- INSERT INTO public.answer_charge_receipts(answer_id,owner_id,job_id,input_id,input_digest,pricing,estimate_units,units_per_credit,state)
- VALUES(p_answer,oid,p_job,p_input,p_digest,p_pricing,e::bigint,1000000000,'pending') RETURNING * INTO r;
+ INSERT INTO public.answer_charge_receipts(answer_id,owner_id,job_id,session_id,generation,input_id,input_digest,pricing,estimate_units,units_per_credit,state)
+ VALUES(p_answer,oid,p_job,j.session_id,j.generation,p_input,p_digest,p_pricing,e::bigint,1000000000,'pending') RETURNING * INTO r;
  PERFORM set_config('requi.ledger_kind','debit',true),set_config('requi.ledger_actor','system:answer_accounting',true),
    set_config('requi.ledger_reason','answer estimate',true),set_config('requi.ledger_reference',p_answer,true);
  UPDATE public.credit_accounts SET balance_units=balance_units-e::bigint,updated_at=extract(epoch from clock_timestamp()) WHERE owner_id=oid;
