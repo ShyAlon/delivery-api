@@ -25,7 +25,7 @@ def ctx(tmp_path, **over):
             'runtime_contract': 'sha256:rt', 'acceptance_contract': 'sha256:ac',
             'state_path': tmp_path / 'state.json',
             'state': {'schema': 1, 'key': 'k', 'steps': {}},
-            'typed': lambda prompt: '', 'run_child': lambda args, **kw: None,
+            'typed': lambda prompt: '', 'run_child': lambda args, **kw: None, 'probe': lambda args: 3,
             'docker': lambda a, **kw: '', 'image_exists': lambda i: True,
             'heads': lambda: dict(SHAS), 'latest_origin': lambda: dict(SHAS), 'reexec': lambda: None, 'now': datetime.datetime.now}
     base.update(over)
@@ -73,10 +73,11 @@ def test_pull_all_rerun_when_a_checkout_moved(tmp_path):
 def test_migrate_apply_is_the_owners_gate_and_records(tmp_path):
     calls = []
     answers = iter(['APPLY MIGRATIONS'])
-    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(list(a)), typed=lambda p: next(answers))
+    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(list(a)), typed=lambda p: next(answers),
+            probe=lambda a: (calls.append(list(a)), 3)[1])   # 3 = something pending, so the gate asks
     m.step_migrate(c)
     flat = [' '.join(map(str, a)) for a in calls]
-    assert flat[0].endswith('req migrate'), 'the dry review always runs first'
+    assert flat[0].endswith('req migrate --check'), 'the dry review always runs first'
     assert flat[1].endswith('req migrate --apply')
     assert 'migrate-apply' in c['state']['steps']
 
@@ -85,7 +86,7 @@ def test_migrate_skip_continues_without_applying(tmp_path):
     calls = []
     c = ctx(tmp_path, run_child=lambda a, **k: calls.append(a), typed=lambda p: 'SKIP')
     m.step_migrate(c)
-    assert len(calls) == 1 and '--apply' not in ' '.join(map(str, calls[0]))
+    assert calls == [], 'SKIP must not run migrate --apply (the dry review is the probe now)'
     assert 'migrate-apply' not in c['state']['steps']
 
 
@@ -94,7 +95,7 @@ def test_migrate_any_other_answer_stops_the_sequence(tmp_path):
     c = ctx(tmp_path, run_child=lambda a, **k: calls.append(a), typed=lambda p: 'yes')
     with pytest.raises(m.WorkflowError, match='declined'):
         m.step_migrate(c)
-    assert len(calls) == 1, 'req migrate --apply must not run without the exact typed string'
+    assert len(calls) == 0, 'req migrate --apply must not run without the exact typed string'
 
 
 def test_children_never_receive_answered_stdin(tmp_path):

@@ -142,6 +142,12 @@ def run_child(args, *, interruptible: bool = False, popen=subprocess.Popen) -> N
         raise WorkflowError('step command failed with exit code ' + str(code) + ': ' + ' '.join(str(a) for a in args))
 
 
+def probe(args, *, run=subprocess.run) -> int:
+    """Like run_child but returns the exit code instead of raising, for a step whose exit code is its answer."""
+    log('INFO', 'running: ' + ' '.join(str(a) for a in args))
+    return run([str(a) for a in args]).returncode
+
+
 def venv_check(root: Path) -> None:
     """The exact venv gate the owner steps rely on, moved to the front.
 
@@ -378,7 +384,14 @@ def step_accept_local(ctx) -> None:
 
 
 def step_migrate(ctx) -> None:
-    ctx['run_child'](['bash', str(ctx['req']), 'migrate'])  # dry review, always shown
+    # Dry review, always shown. Exit 0 = nothing to apply (no typed gate: a gate guards a change); 3 = a migration or
+    # role membership is pending (the typed gate below, which lists them in the review above).
+    code = ctx['probe'](['bash', str(ctx['req']), 'migrate', '--check'])
+    if code == 0:
+        log('INFO', 'step 5/7: 0 migrations pending; nothing to apply')
+        return
+    if code != 3:
+        raise WorkflowError('migrate dry review failed with exit code ' + str(code) + '; nothing applied')
     if 'migrate-apply' in ctx['state']['steps']:
         log('PASS', 'step 5/7 reused: migrations recorded applied for these inputs')
         return
@@ -543,7 +556,7 @@ def build_ctx(root: Path) -> dict:
     ctx = {'root': root, 'repos_root': repos_root, 'req': root / 'scripts/ops/req',
            'home': Path.home(), 'shas': shas, 'runtime_contract': runtime_contract, 'acceptance_contract': acceptance,
            'state_path': Path(os.environ.get('REQUI_REBUILD_STATE', str(Path.home() / '.local/share/requi/rebuild/state.json'))),
-           'typed': typed, 'run_child': run_child, 'docker': docker, 'docker_try': docker_try, 'image_exists': image_exists,
+           'typed': typed, 'run_child': run_child, 'probe': probe, 'docker': docker, 'docker_try': docker_try, 'image_exists': image_exists,
            'heads': lambda: checkout_heads(repos_root), 'latest_origin': lambda: fetched_origin_shas(repos_root),
            'reexec': lambda: reexec_front_end(root), 'now': datetime.datetime.now}
     key = run_key(shas, runtime_contract, acceptance)

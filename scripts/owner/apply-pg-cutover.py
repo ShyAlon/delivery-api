@@ -75,9 +75,20 @@ def plan(conn,readiness,root):
         if row['ledger']=='recorded' and row['status']!='present':raise ValueError('ledger/catalog disagree for '+row['file']+'; no automatic repair')
     return rows
 
+def work_to_apply(conn,reviewed,readiness,app_login):
+    """(files not yet applied or partial, restricted roles the app login cannot SET). Both empty = nothing to confirm."""
+    files=[r['file'] for r in reviewed if r['status']!='present']
+    missing=[m['role'] for m in readiness.role_inventory(conn,app_login) if m['status']!='present']
+    return files,missing
+
 def apply(conn,reviewed,readiness,root,app_login,confirm,*,review_functions=False):
     if any(r['status']=='partial' for r in reviewed):raise ValueError('partial migration objects; manual review required, no automatic replay')
     pending=[r for r in reviewed if r['status']=='pending']
+    # A typed gate guards a change. With no migration to run and every membership already granted there is no change,
+    # so there is nothing to confirm (2026-11-10: the owner was asked to type "APPLY 0 MIGRATIONS TO <login>").
+    if not pending and not work_to_apply(conn,reviewed,readiness,app_login)[1]:
+        print('0 migrations pending; restricted SET memberships already granted to '+app_login+'. Nothing to apply, no confirmation needed.')
+        return 0
     print('Type only the text inside quotes, without the quote marks. Press Enter to cancel.')
     reviewed_functions=review_projection_functions(reviewed,confirm) if review_functions else {}
     allowed={**APPROVED_DESTRUCTIVE,**reviewed_functions}
@@ -165,7 +176,7 @@ def check_targets(admin,app):
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--preview-offer',action='store_true',help='return to preview after apply; do not run separate operator file setup');p.add_argument('--env-file');p.add_argument('--review-projection-functions',action='store_true',help='allow a separate exact filename+SHA typed review of known private cache DELETE function definitions; not arbitrary destructive SQL');p.add_argument('--identify',action='store_true',help='read-only app identity and settings source only; no admin URL required');args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--check',action='store_true',help='dry review, then exit 0 when nothing needs applying or 3 when a migration or role membership is pending; changes nothing');p.add_argument('--preview-offer',action='store_true',help='return to preview after apply; do not run separate operator file setup');p.add_argument('--env-file');p.add_argument('--review-projection-functions',action='store_true',help='allow a separate exact filename+SHA typed review of known private cache DELETE function definitions; not arbitrary destructive SQL');p.add_argument('--identify',action='store_true',help='read-only app identity and settings source only; no admin URL required');args=p.parse_args()
     root=Path(args.repo).expanduser().resolve();py=root/'.venv/bin/python'
     if not py.is_file():raise ValueError('checkout .venv missing')
     if Path(sys.prefix).resolve()!=(root/'.venv').resolve():os.execv(str(py),[str(py),str(Path(__file__).resolve()),*sys.argv[1:]])
@@ -210,6 +221,12 @@ def main():
         print('ROLLBACK: each migration has its own transaction; a failed file rolls back, earlier APPLIED files persist. Rerun dry review to resume. No automatic down-migration or runtime rollback.')
         for row in reviewed:print(json.dumps(row,sort_keys=True))
         print('Catalog presence does not prove exact applied SQL/checksum. Supabase ledger shown only if available. No older migration is replayed automatically.')
+        if args.check:
+            if args.apply:raise ValueError('--check never applies; drop --apply')
+            files,missing=work_to_apply(conn,reviewed,r,app_login)
+            if not files and not missing:
+                print('0 migrations pending; restricted SET memberships already granted to '+app_login+'. Nothing to apply.');return 0
+            print(str(len(files))+' migration(s) not yet applied'+(' ('+', '.join(files)+')' if files else '')+'; '+str(len(missing))+' restricted SET membership(s) missing'+(' ('+', '.join(missing)+')' if missing else '')+'.');return 3
         if not args.apply:print('DRY ONLY. To request changes rerun with --apply; partial or unknown destructive migrations still refuse. Exact private cache functions require --review-projection-functions and their separate typed confirmations.');return 0
         if not sys.stdin.isatty():raise ValueError('apply requires interactive terminal')
         conn.execute('SET default_transaction_read_only=off')
