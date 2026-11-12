@@ -211,3 +211,30 @@ def test_allowlisted_symlink_is_not_followed(owner_machine,monkeypatch,capsys):
         assert not any(name.endswith('answer-sync-table.txt') for name in z.namelist())
         assert b'FAKE-NO-EXPORT-1234' not in b''.join(z.read(name) for name in z.namelist())
     path.unlink()
+
+
+@pytest.mark.parametrize('stopped_status',['exited','created','dead','removing','paused'])
+def test_stopped_containers_keep_logs_but_skip_process_exports(owner_machine,monkeypatch,capsys,stopped_status):
+    import subprocess
+    calls=[]
+    def mixed(command,**kwargs):
+        calls.append(command)
+        if command[:2]==['docker','inspect']:
+            name=command[-1]
+            return SimpleNamespace(stdout=json.dumps({'name':name,'status':'running' if name=='requi-preview-exec' else stopped_status}),returncode=0)
+        if command[:2]==['docker','exec'] and command[2]!='requi-preview-exec':
+            raise AssertionError('must not exec into stopped rollback containers')
+        return _fake_subprocess_run(command,**kwargs)
+    monkeypatch.setattr(subprocess,'run',mixed)
+    path=_run_bundle(monkeypatch,capsys,['preview-debug.py'])
+    try:
+        with zipfile.ZipFile(path) as z:
+            facts=json.loads(z.read('facts.json'))
+            reason='skipped, paused' if stopped_status=='paused' else 'skipped, stopped'
+            assert facts['skipped']==[{'container':'requi-preview-exec-b3','reason':reason,'status':stopped_status}]
+            assert not any('requi-preview-exec-b3' in item for item in facts['missing'])
+            assert 'docker-requi-preview-exec-b3.log' in z.namelist()
+            assert json.loads(z.read('client-navigation-requi-preview-exec-b3.json'))['reason']==reason
+            assert 'answer.trace' in z.read('answer-traces.jsonl').decode()
+        assert not any(c[:3]==['docker','exec','requi-preview-exec-b3'] for c in calls)
+    finally:path.unlink()
