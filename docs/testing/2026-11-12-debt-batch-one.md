@@ -30,39 +30,62 @@ schema, merge a PR or run a paid provider.
 - Answer helpers use the existing explicit PG operation registry, not a second
   decorator-registration path. Their transaction wrapping is unchanged.
 
-## Verification status
+## Verification
 
-Current partial evidence: 2,434 fast passes and four existing skips before the
-last failed-answer UI change; focused real child, installed default/legacy, accounting,
-UI and fake-provider journeys pass. Wider regression sweep is still in progress.
-Do not describe this as a full-suite pass or merge-ready until final verification.
+All checks use disposable PG, real local HTTP/browser/process boundaries and
+stubbed model/provider responses. They do not use paid credentials, a live DB or
+owner settings. Explicit DELIVERY_TEST_ENGINE_SOURCE,
+DELIVERY_TEST_GENERATOR_SOURCE and DELIVERY_TEST_SPEC_SOURCE select the installed
+sibling sources. Missing inputs are not successful execution.
 
-Run tests with explicit DELIVERY_TEST_ENGINE_SOURCE,
-DELIVERY_TEST_GENERATOR_SOURCE and DELIVERY_TEST_SPEC_SOURCE when checking sibling
-source integrations. Missing inputs are not successful execution. No real vendor
-credentials or external database are used.
+Completed local evidence:
 
-## Continuation evidence
-
-- Final fast split: 2,434 passed, four existing skips (before the later tiny
-  failed-answer visibility fix). No hosted CI result is implied.
-- All 167 non-cosmetic main UI nodes exercised in bounded groups. Four stale
-  fixture/assertion issues repaired; their exact reruns pass. Other browser
-  modules exercised in groups; label-only proof now imports in a real browser,
-  not a partially rewritten Node dependency graph.
-- A failed answer hid its question and did not restore it. The existing failing
-  browser test now passes with the original question and draft visible again;
-  late old-render failures still cannot edit a newer view. Screenshot inspection
-  exposed a stale "Processing your answer" progress label after failure. A new
-  failing assertion proved it, then the settled handler refreshed progress after
-  clearing its sending flag, only while the submitting render still owns the
-  page. Six focused accepted-answer/next-question/cancel/failure cases pass,
-  plus eight shadow/cancel/stale cases. The updated screenshot shows the
-  original question, retained draft, retry, and honest waiting-for-you status.
+- Source-enabled fast gate in two disjoint halves: 2,437 passed, two optional
+  skips. This includes the egress guard with the installed engine dependencies.
+- All 35 historical PG retained-snapshot/successor-matrix nodes pass in bounded
+  groups. Another 52 PG scope/store cases pass outside that matrix.
+- All nine crosshost acceptance cases pass in completed bounded groups, including
+  the full session alternating hosts through validation and post-accept
+  navigation recovery. The shared founder/operator/pin setup lives in a fresh
+  owned DB and is force-dropped afterward, never lent to accounting tests.
+- All 167 non-cosmetic main UI nodes exercised in bounded groups. The stale
+  readiness/layout fixtures have passing exact reruns. Other browser modules
+  were exercised in bounded groups, including real review/composer/tracing and
+  final-package journeys. This is not a claim that the full 526-file collection
+  ran in one invocation; no hosted CI pass is implied.
 - Real installed/default/legacy child and generator runtime group: 35 passed.
-- Startup inventory now includes the two existing answer-accounting tables,
-  with their normal backend access. No new migration or live DB action.
-- Big historical PG successor matrix still needs bounded node execution.
-  Ordinary PG scope/store group: 52 passed excluding that matrix. A two-case
-  provider-hold subset passed. Interrupted outputs are not final results.
-- Main remained 7c3f9013 on the last credentialed fetch. No PR opened yet.
+- Startup inventory, diagnostics and fresh local/fake-paid preflight: 69 passed.
+- Mixed UI/ledger/operator ownership: 43 passed. Store-constructor/harness and
+  failure cleanup group: 40 passed. Connected item6 PG runner: three passed.
+- UI boundaries, operator module imports (Node's experimental VM-modules flag),
+  process-control boundary and diff whitespace checks pass.
+
+The broad heavy sweep exposed stale startup inventory, missing explicit source
+inputs and stale UI contracts. Each was fixed and rerun with the relevant source
+inputs. Interrupted runs were never counted as final results.
+
+## Product defects found by unchanged behavior assertions
+
+A missing child registry session raised an untyped KeyError during task reads,
+masking saved artifacts. The narrow typed404 catch leaves serialization errors
+visible instead of mislabeling them missing. Retained final-package and actual
+runtime tests pass.
+
+A failed answer hid its current question without restoring it. The existing
+browser assertion failed first. Restore preserves the original visibility and
+only affects the still-current submitting render. Screenshot inspection then
+caught stale processing progress after503, so a new assertion proved that issue
+before the settlement handler was fixed. Six accepted-answer/next-question/
+cancel/failure cases and eight shadow/cancel/stale cases pass. The inspected
+screenshot shows the original question, retained draft, retry button and honest
+waiting-for-you status. Successful accepted answers remain disabled while the
+next input is awaited; no automatic replay was added.
+
+The final fast sweep exposed a watchdog shutdown race. A new immediate-exit
+assertion failed before stop owned its thread join. Stop now waits at most one
+second and never joins itself. Egress-test startup uses this run's installed
+interpreter rather than demanding a second sibling virtualenv.
+
+No new migration was created. Startup inventory now includes the two existing
+answer-accounting tables and their normal backend access. No billing policy,
+admission limit, cancellation rule, model route or paid execution changed.
