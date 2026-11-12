@@ -1099,7 +1099,9 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
             choices=[]
             for record in options:
                 failures=unsupported(record['payload']['context'],phase_budgets())
-                choices.append({'model':record['model'],'available':not failures,'error':' '.join(failures)})
+                memory=record.get('memory',{})
+                if memory.get('blocked'):failures.append(memory['message'])
+                choices.append({'model':record['model'],'available':not failures,'error':' '.join(failures),'memory':memory})
             ready=next((r for r in choices if r['available']),None)
             routes.append({'id':provider,'available':bool(ready),'managed':True,
                 'model':provider+':'+ready['model'] if ready else None,'models':[r['model'] for r in choices],

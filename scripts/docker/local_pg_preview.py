@@ -161,7 +161,7 @@ def accepted_image(state):
     return image
 
 
-def start_app(resource,nonce,image,envfile,port):
+def start_app(resource,nonce,image,envfile,port,host_memory=None):
     from image_settings import validate
     values=validate(envfile)
     if values.get('DELIVERY_DATABASE_URL')!=DSN or any(values.get(k) for k in DB_KEYS-{'DELIVERY_DATABASE_URL'}):
@@ -173,6 +173,7 @@ def start_app(resource,nonce,image,envfile,port):
     if old:raise WorkflowError('owned local app already exists; use explicit stop before restarting; persistent PG data is retained')
     args=Target(image,resource['app'],str(envfile.resolve()),port,resource['network']).arguments()
     args[1:1]=['--label',LABEL+'='+nonce,'--mount','type=volume,source='+resource['socket']+',target=/owned,readonly']
+    if host_memory is not None:args[1:1]=host_memory.mount_arguments()
     command(['docker',*args])
     for _ in range(120):
         live=inspect_owned('container',resource['app'],nonce)
@@ -221,6 +222,14 @@ def diagnostics(resource,nonce,home):
 
 
 def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,action='start',provider_values=None):
+    if not apply or action!='start':return _preview(root=root,state=state,source=source,home=home,port=port,backoffice_port=backoffice_port,apply=apply,action=action,provider_values=provider_values)
+    from host_memory import HostMemory
+    from contextlib import ExitStack
+    with ExitStack() as lifetime:
+        return _preview(root=root,state=state,source=source,home=home,port=port,backoffice_port=backoffice_port,apply=apply,action=action,provider_values=provider_values,host_memory_factory=lambda:lifetime.enter_context(HostMemory(Path(home)/'host-telemetry')))
+
+
+def _preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,action='start',provider_values=None,host_memory_factory=None):
     home=Path(home).expanduser();home.mkdir(parents=True,exist_ok=True,mode=0o700)
     if home.is_symlink() or home.stat().st_mode&0o077:raise WorkflowError('private local PG workflow directory required')
     nonce=identity(home/'identity.json');resource=names(nonce)
@@ -247,9 +256,10 @@ def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,
     if not apply:return
     log('WARN','Initial local setup grants 100 LOCAL test credits once, local reviewed-operator workspace access, and unchanged $2/$3/$4 guard values. No hosted balance or access is changed. Review model pins in Back office before Start. A copied explicit provider key permits later owner-started paid work only; no call starts now.')
     if not confirm('prepare owned persistent local PG, enroll the reviewed operator locally and open real hosted sign-in; no task starts'):raise WorkflowError('declined')
+    host_memory=host_memory_factory() if host_memory_factory is not None else None
     envfile=home/'local.env';atomic_write(envfile,(''.join(k+'='+v+'\n' for k,v in values.items())).encode())
     ensure_dependency(root,resource,nonce)
-    start_app(resource,nonce,image,envfile,port)
+    start_app(resource,nonce,image,envfile,port,host_memory=host_memory)
     from private_backoffice import PrivateBackoffice
     from local_pg_signin import browse
     backoffice=PrivateBackoffice(backoffice_port,port,home/'backoffice.log')

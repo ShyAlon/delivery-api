@@ -100,6 +100,12 @@ def discover(heads,environ,listing=None):
             if any((r['provider'],r['model'])==('ollama',model['id']) for r in records):continue
             records.append({'id':'ollama:'+model['id'],'provider':'ollama','model':model['id'],
                 'payload':payload,'is_default':True,'source':'verified-local-package'})
+    from .model_memory import host_snapshot,readiness
+    host=host_snapshot(base=ollama_base(environ)) if local_deployment(environ) else None
+    for record in records:
+        if record['provider']!='ollama' or not native_model(record['model']):continue
+        installed=next((r for r in listing.get('installed_models',[]) if r['id']==record['model']),{})
+        record['memory']=readiness(record['model'],record['payload']['context']['context_tokens'],installed.get('file_bytes'),host,listing.get('loaded_models',[]))
     # One runtime bootstrap default per provider; exact UI selection can name
     # any ready entry. Prefer the newly selected family, never a hidden fallback.
     records=[r for r in records if r['provider']!='ollama' or not native_model(r['model']) or r['model'] in ready_native]
@@ -112,6 +118,7 @@ def discover(heads,environ,listing=None):
 def resolve(records,provider,model):
     found=next((r for r in records if r['provider']==provider and r['model']==model),None)
     if found is None:raise ValueError('Selected model is not ready. Reload the model list; no other model was selected.')
+    if found.get('memory',{}).get('blocked'):raise ValueError(found['memory']['message'])
     failures=unsupported(found['payload']['context'],phase_budgets())
     if failures:raise ValueError('This model cannot run the full cycle: '+' '.join(failures))
     return found

@@ -40,15 +40,17 @@ class ParentProviderHTTP:
             raise ValueError('fixed reviewed provider endpoint required')
         if client.follow_redirects:raise ValueError('provider redirects forbidden')
         self.client,self.endpoint,self.headers=client,endpoint,dict(headers)
-        self.local_context=local_context
+        self.local_context=local_context;self.local_observation=None
 
     def send(self,raw):
         # Do not use json=: accounting, replay and dispatch bind these exact bytes.
         payload=json.loads(raw);stream=payload.get('stream',False)
         from .model_registry import native_model
         if native_model(payload.get('model')) and httpx.URL(self.endpoint).host!='api.deepseek.com':
-            from .ollama_native import send
-            return send(self.client,self.endpoint,raw,self.local_context)
+            from .ollama_native import send,observe_loaded
+            result=send(self.client,self.endpoint,raw,self.local_context)
+            if self.local_observation is None:self.local_observation=observe_loaded(self.client,self.endpoint,self.local_context)
+            return result
         headers=httpx.Headers(self.headers)
         headers['Content-Type']='application/json'
         headers['Accept']='text/event-stream' if stream else 'application/json'

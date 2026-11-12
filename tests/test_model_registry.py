@@ -77,6 +77,9 @@ def test_native_transport_enforces_context_and_preserves_usage_and_length():
     from delivery_api.provider_http import ParentProviderHTTP
     requests=[]
     def respond(request):
+        if request.method=='GET':
+            assert request.url.path=='/api/ps'
+            return httpx.Response(200,json={'models':[{'name':'qwen3:8b','context_length':32768,'size':10*1024**3,'size_vram':10*1024**3}]})
         requests.append(request);body=json.loads(request.content)
         assert request.url.path=='/api/chat'
         assert body['options']=={'num_ctx':32768,'num_predict':12288,'temperature':0.2}
