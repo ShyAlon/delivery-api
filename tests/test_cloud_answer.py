@@ -22,6 +22,8 @@ def _setup(monkeypatch, *, finished, pending=None):
                add_event=lambda *a, **k: seen["events"].append((a, k)),
                add_review_comment=lambda *a, **k: None,
                recoverable_worker_jobs=lambda: [], decision_review=lambda *a, **k: None)
+    # The batch contract retains identical ordered events, not fewer assertions.
+    store.add_event_batch=lambda tid,entries:[store.add_event(tid,e['kind'],e['message'],phase_key=e.get('phase_key'),payload=e.get('payload')) for e in entries]
     snapshot = NS(session_id="s1", sequence=4, open_input=pending or _pending())
     def submit(session_id, response):
         seen["submitted"].append((session_id, response))

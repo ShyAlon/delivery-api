@@ -37,4 +37,4 @@ def test_no_direct_store_or_runner_call_in_the_async_answer_handler():
 
 def test_the_handler_still_offloads_them():
     src=ast.get_source_segment(APP.read_text(),_handler())
-    assert src.count('run_in_threadpool(store.add_event')>=5 and 'run_in_threadpool(store.task,' in src
+    assert src.count('run_in_threadpool(store.add_event_batch,')==2 and 'run_in_threadpool(store.add_event,' in src and 'run_in_threadpool(store.task,' in src

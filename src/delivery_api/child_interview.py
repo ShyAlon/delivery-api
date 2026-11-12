@@ -182,7 +182,8 @@ class ChildInterviewClient(EngineClient):
         return {'config_version':question_config.CONFIG_VERSION,'config':saved}
     def snapshot(self,sid):
         with self._registry() as registry:return registry.get(sid,serve=False).snapshot()
-    def progress(self,sid,after=0):
+    def answer_progress(self,sid,after=0):
+        """Best-effort memory stream, never a durable engine journal cursor."""
         from .tenancy import current_scope
         from vmodel_contracts.progress_signal import ProgressPage
         with self._progress_lock:
@@ -190,6 +191,14 @@ class ChildInterviewClient(EngineClient):
             if target is not None and target['scope']==current_scope():
                 events=[e for e in target['events'] if e.cursor>after]
                 return ProgressPage(events=events,next_cursor=events[-1].cursor if events else after)
+        return None
+    def progress(self,sid,after=0):
+        # Public callers retain the observational stream. The delivery watcher
+        # uses answer_progress explicitly, keeping its cursor out of PG ingest.
+        page=self.answer_progress(sid,after)
+        if page is not None:return page
+        return self.durable_progress(sid,after)
+    def durable_progress(self,sid,after=0):
         with self._registry() as registry:return registry.progress(sid,after)
     def _stopped_snapshot(self,sid,*,reconcile=False):
         # Fresh parent registries never own the vanished child's writer claim.

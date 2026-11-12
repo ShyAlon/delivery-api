@@ -103,3 +103,10 @@ def test_without_a_cache_every_drain_still_reads_the_cursor(env):
     for _ in range(3):
         drain(None)
     assert store.reads == 3
+
+
+def test_a_single_drain_without_explicit_cache_does_not_reread_each_page(env):
+    store,engine,cache,clock=env
+    engine.events_at={7,8}
+    drain(None)
+    assert store.reads==1 and engine.asked==[7,8,9]

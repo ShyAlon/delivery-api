@@ -48,3 +48,10 @@ def validate_interview_page(task_id,session_id,page):
 def ingest_interview_page(store,task_id: str,session_id: str,page):
     validate_interview_page(task_id,session_id,page)
     return store.ingest_interview_progress_page(task_id,session_id,page)
+
+
+def ingest_answer_page(store,task_id: str,session_id: str,page):
+    """Retain stage history, not the answer's transient cursor or per-call log."""
+    validate_interview_page(task_id,session_id,page)
+    if not any(retain_interview_signal(signal) for signal in page.events):return 0
+    return store.ingest_answer_progress_page(task_id,session_id,page)

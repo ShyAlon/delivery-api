@@ -37,7 +37,9 @@ def test_each_flagged_read_is_one_network_trip(store):
                            ('stop_state', lambda: store.stop_state(tid, sid)),
                            ('worker_authority', lambda: store.worker_authority(tid)),
                            ('progress_cursor', lambda: store.progress_cursor(tid, 'interview', sid)),
-                           ('auth_session_active', lambda: store.auth_session_active())):
+                           ('auth_session_active', lambda: store.auth_session_active()),
+                           ('task_model_pin',lambda:store.task_model_pin(tid)),
+                           ('worker_job',lambda:store.worker_job('missing'))):
             _, syncs, stats = _syncs(call)
             assert syncs == 1, (name, syncs, [e[:2] for e in stats.trace])
             assert stats.transactions == 1, name
