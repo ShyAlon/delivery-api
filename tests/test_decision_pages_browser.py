@@ -427,7 +427,8 @@ def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p.screenshot(path='/tmp/reference-review-desktop.png',full_page=True)
  p.set_viewport_size({'width':390,'height':844})
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
- assert p.locator('.semantic-footer').evaluate('e=>getComputedStyle(e).position') == 'fixed'  # Shared current-action strip stays visible on phone.
+ # ResizeObserver applies the measured shared strip on the next layout frame.
+ expect(p.locator('.semantic-footer')).to_have_css('position','fixed')  # Still require the fixed phone strip.
  p.locator('.semantic-item').scroll_into_view_if_needed()
  p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
  p.screenshot(path='/tmp/reference-review-mobile.png',full_page=True)

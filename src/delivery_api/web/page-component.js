@@ -10,7 +10,8 @@ main.has-shared-actions{padding-bottom:calc(var(--shared-action-reserve,0px) + 2
 body.ops-page #app,body.ops-page #frame{height:auto!important;min-height:0;flex:none!important}
 body.ops-page #panels{grid-template-rows:auto auto!important;flex:none!important}
 body.ops-page .panel,body.ops-page .scroll,.private-workspace .scroll,.private-workspace .force-plan{height:auto!important;max-height:none!important;overflow-y:visible!important}
-.shared-action-strip.readonly,.shared-action-strip.historical-review{position:static;box-shadow:none}
+#semanticform .shared-action-strip,.shared-action-strip{position:fixed}
+#semanticform .shared-action-strip.readonly,#semanticform .shared-action-strip.historical-review,.shared-action-strip.readonly,.shared-action-strip.historical-review{position:static;box-shadow:none}
 
 .gate-controls{position:static!important;max-height:none!important;overflow:visible!important;margin-top:24px}
 .decision-options,.decision-body,.gate-evidence,.gate-artifact,.gate-structured,.context-body,.qa-history,.qa-items,.live-console,.console,.artifact-readable,.json-view,.feedback-context,.decision-scroll,.artifact-content,#node-detail{max-height:none!important;height:auto!important;overflow-y:visible!important}
@@ -29,7 +30,7 @@ body.ops-page .panel,body.ops-page .scroll,.private-workspace .scroll,.private-w
 footer:has(.operation-status){position:static!important}
 footer>.operation-status{position:static!important;max-width:100%;background:var(--card);padding:10px 14px;border:1px solid var(--line);border-radius:10px}
 @media(max-width:700px){.shared-action-strip{gap:6px;padding:8px 16px calc(8px + env(safe-area-inset-bottom))}.shared-action-strip .gate-page-actions,.shared-action-strip>.actions{width:100%;flex-basis:100%}.shared-action-strip .decision-checklist{font-size:12px;padding:3px 8px}.shared-action-strip button{min-height:44px}.shared-action-strip .decision-launch{font-size:12px}footer>.operation-status{font-size:12px}}
-@media(max-height:500px){.shared-action-strip{position:static;box-shadow:none;padding:10px;margin-top:16px}main{padding-bottom:30px}}
+@media(max-height:500px){#semanticform .shared-action-strip,.shared-action-strip{position:static;box-shadow:none;padding:10px;margin-top:16px}main{padding-bottom:30px}}
 `;
 let flowWired=false;
 function wirePageFlow(){

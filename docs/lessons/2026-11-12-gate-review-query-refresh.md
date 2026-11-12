@@ -15,3 +15,8 @@ A saved item is not phase approval. Never enable approval merely because the wri
 After760/765 integration, retain pending accepted/release state and both pending
 and stale-mount refresh guards. Browser reproductions open Other actions then
 Add comment before editing, matching the new shared closed-by-default layout.
+
+760's scoped semantic-footer position rule beats765's generic shared-strip
+selector. The Page rule must own that scoped selector too, including read-only
+and <=500px static fallbacks. Combined reference-review and pending-form browser
+tests caught this; keep those behavioral assertions rather than dropping them.
