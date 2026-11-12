@@ -457,6 +457,8 @@ def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(pg_page,pg_u
     cancel.click();page.get_by_text('Send cancelled. Your answer is still here.').wait_for()
     assert send.is_enabled() and answer.is_enabled() and answer.input_value()=='A careful answer still in flight'
     assert spinner.is_hidden()
+    assert page.locator('#currentquestion').is_visible()
+    assert 'Processing your answer' not in page.locator('#stageprogress').inner_text()
     if pending:pending[0].abort()
 
 def test_answer_enter_sends_and_control_enter_inserts_newline(pg_page,pg_ui,pg_ids):
@@ -2106,6 +2108,7 @@ def test_shadow_copy_not_shown_when_send_fails(pg_page, pg_ui, pg_ids):
     page.get_by_text('Answer could not be sent.', exact=False).wait_for()
     assert page.locator('#shadowcopy').is_hidden() and page.locator('#answerform').is_visible()
     assert answer.input_value() == 'Keep me' and page.locator('#currentquestion').is_visible()
+    assert 'Processing your answer' not in page.locator('#stageprogress').inner_text()
     page.screenshot(path='/downloads/debt-answer-failure-restored.png',full_page=True)
 
 

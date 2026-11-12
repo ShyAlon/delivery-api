@@ -32,8 +32,8 @@ schema, merge a PR or run a paid provider.
 
 ## Verification status
 
-Current partial evidence: 2,431 fast passes and four existing skips before the
-last registry change; focused real child, installed default/legacy, accounting,
+Current partial evidence: 2,434 fast passes and four existing skips before the
+last failed-answer UI change; focused real child, installed default/legacy, accounting,
 UI and fake-provider journeys pass. Wider regression sweep is still in progress.
 Do not describe this as a full-suite pass or merge-ready until final verification.
 
@@ -53,8 +53,12 @@ credentials or external database are used.
 - A failed answer hid its question and did not restore it. The existing failing
   browser test now passes with the original question and draft visible again;
   late old-render failures still cannot edit a newer view. Screenshot inspection
-  shows a remaining stale "Processing your answer" progress label, which needs
-  investigation before completion. Do not call the whole failure UI repaired.
+  exposed a stale "Processing your answer" progress label after failure. A new
+  failing assertion proved it, then the settled handler refreshed progress after
+  clearing its sending flag, only while the submitting render still owns the
+  page. Six focused accepted-answer/next-question/cancel/failure cases pass,
+  plus eight shadow/cancel/stale cases. The updated screenshot shows the
+  original question, retained draft, retry, and honest waiting-for-you status.
 - Real installed/default/legacy child and generator runtime group: 35 passed.
 - Startup inventory now includes the two existing answer-accounting tables,
   with their normal backend access. No new migration or live DB action.
