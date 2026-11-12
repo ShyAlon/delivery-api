@@ -22,6 +22,12 @@ MAX_RESPONSE=8*1024*1024
 class BrokerPaused(RuntimeError):pass
 
 
+class LocalPlanRefused(BrokerPaused):
+    """Fixed parent-only pre-dispatch cause, never child-controlled prose."""
+    def __init__(self):
+        super().__init__('Local model request is incompatible with this execution plan. No provider call was made and no input was truncated. Split this phase or choose a compatible model.')
+
+
 class ProviderRefused(BrokerPaused):
     """Only parent-generated, sanitized HTTP refusal text may cross to the UI."""
     def __init__(self,error):
@@ -47,7 +53,7 @@ class ChildProviderBroker:
         from .provider_http import ParentProviderHTTP
         self.operation=operation;self.gateway=gateway;self.journal=journal;self.client=client
         self.endpoint=endpoint;self.headers=dict(headers);self.authorize=authorize;self.lock=threading.Lock()
-        self.http=ParentProviderHTTP(client,endpoint,headers);self.timings=[]
+        self.http=ParentProviderHTTP(client,endpoint,headers,local_context=getattr(gateway,'local_context',None));self.timings=[]
 
     def dispatch(self,value):
         call=ProviderCall.model_validate(value)
@@ -58,6 +64,11 @@ class ChildProviderBroker:
         if not 0<len(raw)<=MAX_REQUEST:raise ValueError('bounded serialized request required')
         from .provider_request import request_contract
         payload,output_cap=request_contract(raw,call.model)
+        from .model_registry import native_model
+        if call.provider=='ollama' and native_model(call.model):
+            from .ollama_native import prepare
+            try:prepare(raw,self.http.local_context)
+            except ValueError as exc:raise LocalPlanRefused() from exc
         # Buffer terminal SSE too: raw response is durably stored before any
         # bytes are delivered to the child. No blind streaming/retry window.
         if type(payload.get('stream',False)) is not bool:raise ValueError('boolean stream required')

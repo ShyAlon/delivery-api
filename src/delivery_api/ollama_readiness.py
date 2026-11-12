@@ -27,7 +27,34 @@ def probe(base,model=None):
         for row in rows:
             name=row.get('name') if isinstance(row,dict) else None
             if not isinstance(name,str) or not __import__('re').fullmatch(r'[a-zA-Z0-9._:/-]{1,200}',name):continue
-            models.append({'id':name,'file_bytes':row.get('size') if type(row.get('size')) is int else None})
+            models.append({'id':name,'file_bytes':row.get('size') if type(row.get('size')) is int else None,**({'digest':row['digest']} if isinstance(row.get('digest'),str) else {})})
+        # Read metadata only, no load/prompt. Older servers that cannot report
+        # explicit thinking controls are not ready for the native execution plan.
+        from delivery_api.model_registry import native_model
+        control_version=False
+        if any(native_model(item['id']) for item in models):
+            try:
+                import re
+                version=get('/api/version').get('version','')
+                match=re.fullmatch(r'(\d+)\.(\d+)\.(\d+)',version)
+                control_version=bool(match and tuple(map(int,match.groups()))>=(0,17,1))
+                out['server_version']=version if match else 'unverified'
+            except Exception:pass
+        for item in models:
+            if not native_model(item['id']):continue
+            if not control_version:
+                item['capability_check']='server_no_verified_no_truncation_controls';continue
+            try:
+                request=Request(origin+'/api/show',data=json.dumps({'model':item['id']}).encode(),headers={'Content-Type':'application/json'},method='POST')
+                with opener.open(request,timeout=3) as response:
+                    raw=response.read(262145)
+                    if len(raw)>262144:raise ValueError('too large')
+                    detail=json.loads(raw)
+                item['capabilities']=detail.get('capabilities',[])
+                item['thinking']=detail.get('thinking')
+                info=detail.get('model_info',{});arch=info.get('general.architecture')
+                item['native_context']=info.get(str(arch)+'.context_length')
+            except Exception:item['capability_check']='unsupported_server_or_model'
         names={r['id'] for r in models}
         out.update(reachable=True,installed_models=models,selected_model_present=bool(model and (model in names or ':' not in model and model+':latest' in names)))
         try:

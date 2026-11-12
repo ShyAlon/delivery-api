@@ -1073,17 +1073,39 @@ def _ollama_route_choice(model=None,*,managed=False):
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
     from . import cloud_runtime
+    from .model_registry import local_deployment
     gateway=cloud_runtime.gateway_factory()
     open_now=cloud_execution_admitted()
     admitted_models=getattr(gateway,'models',{}) if gateway else {}
+    if not cloud_runtime.installed() and cloud_runtime.unavailable_reason()=='no_approved_model_pin':
+        try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
+        except Exception:pass # Runtime keeps bounded diagnostics; listing grants no dispatch.
+        gateway=cloud_runtime.gateway_factory()
     if not cloud_runtime.installed():
         reason=cloud_runtime.unavailable_reason()
         # This is the customer workspace, including when the actor is an admin.
         message='No approved interview model is configured. Ask the operator to set one up.' if reason=='no_approved_model_pin' else 'Interviews are unavailable because the execution runtime is not ready. Ask the operator to check startup evidence.'
         return {'routes':[{'id':route,'available':False,'managed':True,'reason':reason,'error':message,
-            'operator_repair':False} for route in ('deepseek','ollama')],
+            'operator_repair':False} for route in ('deepseek','ollama') if (route!='ollama' or local_deployment(os.environ)) and (route!='deepseek' or os.environ.get('DEEPSEEK_API_KEY','').strip())],
             'default_route':None,'managed':True}
 
+    if gateway is not None and hasattr(gateway,'registry'):
+        from .model_registry import unsupported,phase_budgets,local_deployment
+        records=gateway.registry();routes=[]
+        for provider in ('deepseek','ollama'):
+            if provider=='ollama' and not local_deployment(os.environ):continue
+            if provider=='deepseek' and not os.environ.get('DEEPSEEK_API_KEY','').strip():continue
+            options=[r for r in records if r['provider']==provider]
+            choices=[]
+            for record in options:
+                failures=unsupported(record['payload']['context'],phase_budgets())
+                choices.append({'model':record['model'],'available':not failures,'error':' '.join(failures)})
+            ready=next((r for r in choices if r['available']),None)
+            routes.append({'id':provider,'available':bool(ready),'managed':True,
+                'model':provider+':'+ready['model'] if ready else None,'models':[r['model'] for r in choices],
+                'choices':choices,'reason':'registry_model_unavailable' if not ready else None,'error':None if ready else (' '.join(c['error'] for c in choices) or 'No compatible installed model is ready. Start Ollama or choose another model.') if provider=='ollama' else 'DeepSeek is not available on this server.'})
+        chosen=next((r for r in routes if r['available']),None)
+        return {'routes':routes,'default_route':{'route':chosen['id'],'model':chosen['model'].split(':',1)[1]} if chosen else None,'managed':True}
     # This endpoint belongs to the customer workspace, even for an admin.
     # Raw readiness evidence belongs only to the separate operations surface.
     closed_message='Interviews are temporarily unavailable. Please try again later.'
@@ -1128,21 +1150,32 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
             selected_route,initial_model=initial['route'],initial.get('model')
         except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
         except EngineUnreachableError as exc:raise _engine_unreachable(exc)
-    elif body.initial_model:
-        try:initial=await run_in_threadpool(engine_client.default_route)
-        except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
-        except EngineUnreachableError as exc:raise _engine_unreachable(exc)
-        if selected_route!=initial.get("route") or body.initial_model!=initial.get("model"):
-            raise HTTPException(422,"initial model must match the engine's current new-session default")
-        initial_model=body.initial_model
+    else:initial_model=body.initial_model
     if (selected_route not in ('deepseek','ollama')):
         raise HTTPException(422,{"error":"That model route is not available on this server.","cause":"managed routes: "+", ".join(local_route.managed_routes()),"next":"Reload the Start screen and choose an available route."})
+    from . import cloud_runtime
+    canonical=cloud_runtime.gateway_factory()
+    if canonical is not None and hasattr(canonical,'registry'):
+        from .model_registry import resolve
+        from .model_pins import environment
+        records=getattr(canonical,'refresh_registry',canonical.registry)()
+        if initial_model is None:
+            selected=next((r for r in records if r['provider']==selected_route and r['is_default']),None)
+            initial_model=selected['model'] if selected else None
+        try:
+            record=resolve(records,selected_route,initial_model)
+            canonical._factory(environment([record['payload']])) # Prepare, never dispatch.
+        except ValueError as exc:raise HTTPException(422,str(exc))
+    elif initial_model and getattr(canonical,'models',{}).get(selected_route)!=initial_model:
+        raise HTTPException(422,{'error':'Requested model does not match the reviewed route.',
+            'cause':f'Requested {selected_route}:{initial_model}; reviewed {selected_route}:{getattr(canonical,"models",{}).get(selected_route) or "not configured"}.',
+            'next':'Reload the model list. Task was not started.'})
     # Same engine resolver as the Start screen; never infer a model from the
     # route name or a second copy of the .env in delivery.
     try:
         # Legacy initial model is preflighted by the engine during Start, not
         # guessed from a separate catalog preview that could name a missing model.
-        preview=await run_in_threadpool(engine_client.preview_route,selected_route) if not initial_model else None
+        preview=await run_in_threadpool(engine_client.preview_route,selected_route,initial_model) if initial_model else await run_in_threadpool(engine_client.preview_route,selected_route)
         effective_models=preview["model_map"] if preview else {stage:[selected_route,initial_model] for stage in ("probing","distillation","phrasing","scope_tiebreak","expert_opinion","conops")}
         pairs={tuple(pair) for pair in effective_models.values()}
         if len(pairs)!=1:raise ValueError("engine route preview returned divergent stage models")
@@ -1155,7 +1188,12 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     except (KeyError,TypeError,ValueError) as exc:raise HTTPException(502,{"error":"Engine model preview was invalid.","cause":str(exc),"next":"Check the engine version and retry."})
     from . import cloud_runtime
     installed=cloud_runtime.gateway_factory()
-    reviewed=getattr(installed,'models',{}).get(selected_route) if installed else None
+    if installed is not None and hasattr(installed,'registry'):
+        from .model_registry import resolve
+        try:resolve(installed.registry(),selected_route,model)
+        except ValueError as exc:raise HTTPException(422,str(exc))
+        reviewed=model
+    else:reviewed=getattr(installed,'models',{}).get(selected_route) if installed else None
     if reviewed!=model:
         raise HTTPException(422,{'error':'Requested model does not match the reviewed route.',
             'cause':f'Requested {provider}:{model}; reviewed {selected_route}:{reviewed or "not configured"}.',
@@ -1165,7 +1203,9 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         if not configured(store):
             activity('operator.expense_policy.missing','Provider dispatch blocked: operator expense policy missing',task_id=task_id)
             raise HTTPException(503,'This model is temporarily unavailable. Please choose another available model or try later.')
-    if (hasattr(installed,'for_task')):installed.for_task(task_id)
+    if hasattr(installed,'for_task'):
+        try:installed.for_task(task_id,(selected_route,model))
+        except ValueError as exc:raise HTTPException(422,str(exc))
     proposed_session=str(uuid4())
     if not store.begin_interview_start(task_id,proposed_session,selected_route):
         raise HTTPException(409,"task already started")

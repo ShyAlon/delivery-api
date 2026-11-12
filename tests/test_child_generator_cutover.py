@@ -6,11 +6,14 @@ from delivery_api.tenancy import tenant_context,session_root
 from test_postgres_store import A,DSN
 
 
-@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs','open-needs'])
+@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs','open-needs','registry-qwen-srs','registry-qwen35-srs'])
 def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkeypatch,stage):
     pytest.importorskip('spec_generator')
     from delivery_api import config
     from vmodel_contracts import CONTRACT_VERSION
+    registry_model=stage in ('registry-qwen-srs','registry-qwen35-srs')
+    registry_name='qwen3.5:9b' if stage=='registry-qwen35-srs' else 'qwen3:8b'
+    if registry_model:stage='srs'
     open_chain=stage=='open-needs'
     if open_chain:stage='needs'
     installed=stage=='installed-paid-srs'
@@ -35,7 +38,12 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 from strict_provider import read_request
-                payload=read_request(self);calls.append(payload)
+                if registry_model:
+                    payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                    assert self.path=='/api/chat' and payload['options']['num_ctx']==(131072 if registry_name=='qwen3.5:9b' else 32768)
+                    assert payload['truncate'] is False and payload['shift'] is False
+                else:payload=read_request(self)
+                calls.append(payload)
                 content=json.dumps({'purpose':'Record task evidence','scope_summary':'Record evidence for people'}) if 'purpose, scope_summary' in json.dumps(payload) else json.dumps({'title':'Record evidence','statement':'The system shall record task evidence for people.','priority':'must','acceptance':['Task evidence is recorded.']})
                 if payload.get('stream'):
                     events=[{'id':'fake','model':'fake','choices':[{'index':0,'delta':{'role':'assistant','content':content},'finish_reason':None}]},
@@ -47,6 +55,8 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                     body=b''.join(b'data: ' +json.dumps(e).encode()+b'\n\n' for e in events)+b'data: [DONE]\n\n';ct='text/event-stream'
                 else:
                     body=json.dumps({'id':'fake','model':'fake','choices':[{'index':0,'message':{'role':'assistant','content':content},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20,'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10}}).encode();ct='application/json'
+                if registry_model:
+                    body=json.dumps({'model':registry_name,'done':True,'done_reason':'stop','message':{'role':'assistant','content':content},'prompt_eval_count':10,'eval_count':10}).encode();ct='application/json'
                 self.send_response(200);self.send_header('Content-Type',ct);self.end_headers();self.wfile.write(body)
             def log_message(self,*a):pass
         server=HTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
@@ -60,6 +70,17 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
             def _attempt(self,a):return {'state':self.states[a]}
         from contextlib import ExitStack
         stack=ExitStack();factory=lambda cap,job:Gateway(job);paid_runtime=None;route='ollama:fake'
+        if registry_model:
+            import psycopg
+            with psycopg.connect(DSN) as conn:
+                conn.execute('INSERT INTO admission_limits VALUES(%s,%s,86400,NULL,NULL,NULL,NULL,60,NULL,3) ON CONFLICT(owner_id) DO NOTHING',(A.owner_id,'registry-test'))
+                conn.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,0,1000000000,0) ON CONFLICT(owner_id) DO NOTHING',(A.owner_id,))
+            from delivery_api import model_pins,model_registry
+            monkeypatch.setattr(model_pins.PinRepository,'list',lambda self:[])
+            monkeypatch.setattr(model_registry,'probe',lambda *a:{'reachable':True,'installed_models':[{'id':registry_name,'digest':('56671c2ab938' if registry_name=='qwen3.5:9b' else model_registry.QWEN_DIGEST)+'a'*52,'capabilities':['completion','thinking'],'thinking':{'values':[True,False]},'native_context':262144}]})
+            factory=model_pins.DurableGateways(store,{})
+            factory.for_task(tid,('ollama',registry_name));route='ollama:'+registry_name
+            with store._postgres.transaction() as conn:conn.execute('UPDATE worker_jobs SET execution_options=%s::jsonb WHERE job_id=%s',(json.dumps({'model_route':route}),job))
         if paid:
             import psycopg
             from paid_child_fixture import paid_child
@@ -127,6 +148,10 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
             else:output=asyncio.run(go())
         finally:
             server.shutdown();server.server_close()
+            if registry_model:
+                with psycopg.connect(DSN) as conn:
+                    conn.execute('DELETE FROM admission_limits WHERE owner_id=%s AND config_version=%s',(A.owner_id,'registry-test'))
+                    conn.execute('DELETE FROM credit_accounts WHERE owner_id=%s AND balance_units=0',(A.owner_id,))
             if paid:
                 with store._postgres.transaction() as conn:
                     rows=conn.execute("SELECT state,deterministic_ms FROM retail_compute_segments WHERE job_id=%s",(job,)).fetchall()

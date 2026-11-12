@@ -15,18 +15,25 @@ from delivery_api.tenancy import tenant_context
 
 
 @pytest.mark.parametrize('paid',[False,True])
-def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,paid,owner_acceptance=False):
+def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,paid,owner_acceptance=False,registry_model=False):
     # Missing producer packages are errors, not a silently skipped acceptance.
     import interview_engine, spec_generator
     from delivery_api import app as module,cloud_runtime
     from test_local_ollama_ledger import local_env,MODEL
+    if registry_model:MODEL=registry_model if isinstance(registry_model,str) else 'qwen3:8b'
     calls=[]
     class Provider(BaseHTTPRequestHandler):
         def do_GET(self):
-            body=json.dumps({'data':[{'id':MODEL}]}).encode()
+            data={'models':[{'name':MODEL,'size':5200000000,'digest':('56671c2ab938' if MODEL=='qwen3.5:9b' else '500a1f067a9f')+'a'*52}]} if registry_model and self.path in ('/api/tags','/api/ps') else {'data':[{'id':MODEL}]}
+            if registry_model and self.path=='/api/version':data={'version':'0.17.1'}
+            body=json.dumps(data).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def do_POST(self):
-            payload=json.loads(self.rfile.read(int(self.headers['content-length'])));calls.append(payload)
+            payload=json.loads(self.rfile.read(int(self.headers['content-length'])))
+            if registry_model and self.path=='/api/show':
+                body=json.dumps({'capabilities':['completion','thinking'],'thinking':{'values':[True,False]},'model_info':{'general.architecture':'qwen','qwen.context_length':262144 if MODEL=='qwen3.5:9b' else 32768}}).encode()
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body);return
+            calls.append(payload)
             if owner_acceptance and len(calls)==1:time.sleep(5)
             content=({'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake web app'}
                      if 'is_web_app' in json.dumps(payload) else
@@ -36,6 +43,11 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 tool=payload['tools'][0]['function']['name']
                 message={'role':'assistant','content':json.dumps(content),'tool_calls':[{'id':'fake-tool','type':'function','function':{'name':tool,'arguments':json.dumps({'payload':content})}}]};finish='tool_calls'
             body=json.dumps({'id':'fake','object':'chat.completion','model':payload['model'],'choices':[{'index':0,'message':message,'finish_reason':finish}],'usage':{'prompt_tokens':10,'completion_tokens':1,'total_tokens':11,**({'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10} if payload['model'].startswith('deepseek') else {})}}).encode()
+            if registry_model:
+                assert self.path=='/api/chat'
+                assert payload['options']['num_ctx']==(131072 if MODEL=='qwen3.5:9b' else 32768) and payload['think'] is False
+                assert payload['truncate'] is False and payload['shift'] is False
+                body=json.dumps({'model':MODEL,'done':True,'done_reason':'stop','message':message,'prompt_eval_count':10,'eval_count':1}).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def log_message(self,*a):pass
     vendor=ThreadingHTTPServer(('127.0.0.1',0),Provider)
@@ -55,7 +67,8 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
         selected_route='deepseek';selected_model='deepseek-flash'
         snap=snapshot();snap['model']=selected_model
         paidrow=row(model=selected_model,provider_snapshot=snap)
-        ceiling=dict(CEILING,model=selected_model)
+        # Full-cycle Start now checks the producer's largest output request.
+        ceiling=dict(CEILING,model=selected_model,maximum_output_tokens=12288)
         env.update({production_gateway.PRICES_ENV:json.dumps([paidrow]),production_gateway.CEILING_ENV:json.dumps(ceiling)})
         original=production_gateway.ProductionGateways.__init__
         def init(self,*args,**kw):
@@ -125,6 +138,12 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
                 c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,now(),%s,%s)',(rev,'ollama',MODEL,json.dumps(value),workspace.scope.owner_id,'zero-cost local acceptance reviewed pin'))
                 c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('ollama',MODEL,rev))
+        if registry_model:
+            # No operator pin, no launch-model agreement, zero credit balance.
+            with workspace.admin() as c:
+                c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
+            monkeypatch.setenv('DELIVERY_OLLAMA_MODEL','phi4')
+            monkeypatch.setenv('REQUI_PIN_PROVIDERS','deepseek')
         if owner_acceptance:
             with workspace.admin() as c:
                 c.execute('DELETE FROM operator_principals')
@@ -190,7 +209,7 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 deleted=client.request('DELETE','/api/tasks/'+tid,json={'confirm':True});assert deleted.status_code==200,deleted.text
                 created=client.post('/api/tasks',json=body);assert created.status_code==201,created.text
                 tid=created.json()['task_id']
-                start=client.post(f'/api/tasks/{tid}/start',json={'model_route':selected_route});assert start.status_code==202,start.text
+                start=client.post(f'/api/tasks/{tid}/start',json={'model_route':selected_route,**({'initial_model':MODEL} if registry_model else {})});assert start.status_code==202,start.text
                 deadline=time.monotonic()+35
                 while time.monotonic()<deadline:
                     with tenant_context(workspace.scope):
@@ -221,3 +240,11 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             if paid:
                 with workspace.admin() as c:
                     c.execute("DELETE FROM expense_guard_policy WHERE policy_version='acceptance'")
+
+
+def test_registry_qwen_start_with_no_operator_pin_or_launch_model(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path):
+    test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,False,registry_model=True)
+
+
+def test_registry_qwen35_start_with_no_pin_and_native_context(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path):
+    test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,False,registry_model='qwen3.5:9b')

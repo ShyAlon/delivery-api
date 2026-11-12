@@ -13,7 +13,7 @@ def diagnose(source,home,*,base=None,model=None):
     model=model or values.get('DELIVERY_OLLAMA_MODEL')
     providers=values.get('REQUI_PIN_PROVIDERS','deepseek').split(',')
     report={'read_only':True,'source_path':str(Path(source).expanduser().absolute()),'ollama_provider_selected':'ollama' in providers,
-      'model_selected':bool(model),'memory_fit':'unverified','app_container_limit_bytes':3*1024**3,'approved_pin_note':'Readiness still requires an explicitly approved matching Ollama model pin in Back office. This network check does not approve it.',
+      'model_selected':bool(model),'memory_fit':'unverified','app_container_limit_bytes':3*1024**3,'approved_pin_note':'Known local packages are selected through the app registry. No launch-model setting or operator pin is required. This diagnostic does not load a model or prove memory fit.',
       'memory_note':'The 3GB limit is for Requi.re, not native Mac Ollama. File/list size is not runtime RAM. Context/KV cache and other apps matter. No model was loaded; prior phi4 failure is not a fit pass.'}
     host=probe('http://127.0.0.1:11434/v1',model)
     report['mac_loopback_ollama']=host
@@ -44,8 +44,7 @@ print(json.dumps(r))
     except ValueError:report['container']={'reason':'container_probe_invalid'}
     missing=[]
     current=report['container']
-    if not current.get('ollama_provider_selected'):missing.append('running app REQUI_PIN_PROVIDERS must include ollama')
-    if not current.get('model_selected'):missing.append('running app DELIVERY_OLLAMA_MODEL is missing; choose exact installed ID')
+    # Launch defaults are historical diagnostics, not selection prerequisites.
     if current.get('endpoint_topology')=='container_loopback':missing.append('running app OLLAMA_BASE_URL points inside container, not Mac; use host.docker.internal for native Mac Ollama')
     if not current.get('reachable'):missing.append('Ollama not reachable from running app; verify service/bind/firewall and Docker host route')
     elif current.get('model_selected') and not current.get('selected_model_present'):missing.append('selected model is not installed at the app endpoint')

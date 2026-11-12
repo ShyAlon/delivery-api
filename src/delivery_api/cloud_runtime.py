@@ -4,6 +4,8 @@ Builds the money gateway from reviewed server configuration, then installs the g
 host, and points the service's engine client at the hosted interview. Nothing runs until a user starts work. If any step
 fails, nothing is installed, the reason is kept and execution stays closed (cloud_execution reports it)."""
 from .diagnostic_evidence import thread_target
+import threading
+_install_lock=threading.RLock()
 _state=None
 _failure=None
 _failure_code=None
@@ -45,6 +47,11 @@ def _watch(gateways,stop,seconds):
 
 
 def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=None):
+    with _install_lock:
+        return _install(store,environ,set_engine_client,watch_vendor,paid_runtime=paid_runtime)
+
+
+def _install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=None):
     global _state,_failure,_failure_code,_watcher
     if _state is not None:return
     from . import inprocess_engine
@@ -66,7 +73,8 @@ def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=No
             if gateways.models!=paid_runtime.models:raise ValueError('child models differ from reviewed gateways')
         from .child_generator import ChildGeneratorEngine
         from .child_interview import ChildInterviewHost
-        endpoint=(environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').rstrip('/')+'/chat/completions'
+        from .model_registry import ollama_base
+        endpoint=ollama_base(environ)+'/chat/completions'
         engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
         from .answer_mode import from_environment
         answer_mode=from_environment(environ,paid_runtime)

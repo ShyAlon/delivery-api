@@ -83,13 +83,12 @@ def settings(source,nonce,resource,port,provider_values=None):
     for key,value in (provider_values or {}).items():
         if key not in ('REQUI_PIN_PROVIDERS','DELIVERY_OLLAMA_MODEL','OLLAMA_BASE_URL'):raise WorkflowError('unexpected provider value')
         if value is not None:result[key]=value
-    if 'ollama' in result.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
-        result.setdefault('OLLAMA_BASE_URL','http://host.docker.internal:11434/v1')
-        if not result.get('DELIVERY_OLLAMA_MODEL'):raise WorkflowError('Ollama model ID missing: run req image --local-pg check-ollama, then pass --ollama-model with an installed ID; no model guessed')
-        url=urlsplit(result['OLLAMA_BASE_URL'])
-        if url.hostname in ('localhost','127.0.0.1','::1'):raise WorkflowError('OLLAMA_BASE_URL is container loopback, not the Mac: use --ollama-base-url http://host.docker.internal:11434/v1 for native Mac Ollama')
-        if url.scheme not in ('http','https') or not url.hostname or url.username or url.password or url.query or url.fragment or url.path.rstrip('/') not in ('','/v1'):raise WorkflowError('Ollama endpoint invalid: use an HTTP(S) API origin with optional /v1, no credentials/query')
-        if not re.fullmatch(r'[a-zA-Z0-9._:/-]{1,200}',result['DELIVERY_OLLAMA_MODEL']):raise WorkflowError('Ollama model ID invalid; choose exact installed model ID')
+    # Owned Docker-to-host topology. The UI selects the model.
+    result.setdefault('OLLAMA_BASE_URL','http://host.docker.internal:11434/v1')
+    url=urlsplit(result['OLLAMA_BASE_URL'])
+    if url.hostname in ('localhost','127.0.0.1','::1'):raise WorkflowError('OLLAMA_BASE_URL is container loopback, not the Mac: use --ollama-base-url http://host.docker.internal:11434/v1 for native Mac Ollama')
+    if url.scheme not in ('http','https') or not url.hostname or url.username or url.password or url.query or url.fragment or url.path.rstrip('/') not in ('','/v1'):raise WorkflowError('Ollama endpoint invalid: use an HTTP(S) API origin with optional /v1, no credentials/query')
+    if result.get('DELIVERY_OLLAMA_MODEL') and not re.fullmatch(r'[a-zA-Z0-9._:/-]{1,200}',result['DELIVERY_OLLAMA_MODEL']):raise WorkflowError('Ollama model ID invalid; choose exact installed model ID')
     result.update(DELIVERY_DATABASE_URL=DSN,INTERVIEW_ENGINE_TOKEN=secrets.token_urlsafe(32),
         DELIVERY_PUBLIC_ORIGIN='http://127.0.0.1:'+str(port))
     # Operator config is a local value reviewed at launch, never copied authority.
