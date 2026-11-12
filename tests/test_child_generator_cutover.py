@@ -36,6 +36,10 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
         import threading
         calls=[]
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                assert registry_model and self.path=='/api/ps'
+                body=json.dumps({'models':[{'name':registry_name,'context_length':131072 if registry_name=='qwen3.5:9b' else 32768,'size':10*1024**3,'size_vram':10*1024**3}]}).encode()
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
             def do_POST(self):
                 from strict_provider import read_request
                 if registry_model:

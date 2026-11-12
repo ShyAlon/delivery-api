@@ -24,6 +24,14 @@ def run_browser_smoke(python,script,base,*,run=None):
 
 
 def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge',backoffice_port=8020,apply=False):
+    if not apply:return _preview(state,env_file=env_file,name=name,port=port,network=network,backoffice_port=backoffice_port,apply=False)
+    from host_memory import HostMemory
+    from contextlib import ExitStack
+    with ExitStack() as lifetime:
+        return _preview(state,env_file=env_file,name=name,port=port,network=network,backoffice_port=backoffice_port,apply=True,host_memory_factory=lambda:lifetime.enter_context(HostMemory(state.path.parent/'host-telemetry')))
+
+
+def _preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge',backoffice_port=8020,apply=False,host_memory_factory=None):
     accepted=state.state['stages'].get('local-acceptance',{})
     built=state.state['stages'].get('build',{})
     image_id=built.get('image_id')
@@ -48,6 +56,7 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
     if not apply:return {'state':'reviewed','image_id':image_id,'applied':False}
     if not confirm('start this accepted preview; an existing '+name+' is stopped and kept renamed for rollback (no task is started)'):
         raise WorkflowError('preview declined; nothing started')
+    host_memory=host_memory_factory() if host_memory_factory is not None else None
     # docker --env-file passes values literally (no quote stripping), so hand the
     # container the exact parsed values validate approved, not the owner file.
     container_env=state.path.parent/'preview-container.env'
@@ -68,6 +77,7 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         command(['docker','rename',name,renamed])
         log('INFO','previous preview container '+('was stopped and ' if running is not False else '')+'renamed to '+renamed+'; kept for rollback and reviewed by the rebuild cleanup step')
     args[1:1]=['--label','requi.shared-runtime=1']
+    if host_memory is not None:args[1:1]=host_memory.mount_arguments()
     command(['docker',*args])
     last={}
     for _ in range(120):

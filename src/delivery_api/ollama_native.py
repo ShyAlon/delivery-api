@@ -58,3 +58,33 @@ def send(client,endpoint,raw,context):
         terminal={'id':reply['id'],'object':'chat.completion.chunk','model':model,'choices':[{'index':0,'delta':{},'finish_reason':reason}],'usage':usage}
         return b'data: '+json.dumps(content).encode()+b'\n\ndata: '+json.dumps(terminal).encode()+b'\n\ndata: [DONE]\n\n','text/event-stream'
     finally:response.close()
+
+
+
+def observe_loaded(client,endpoint,context):
+    """Verify the already-loaded plan. No second prompt, load or retry."""
+    url=str(httpx.URL(endpoint).copy_with(path='/api/ps'))
+    try:
+        request=client.build_request('GET',url,timeout=httpx.Timeout(3))
+        response=client.send(request,stream=True,follow_redirects=False)
+        try:
+            raw=bytearray()
+            for chunk in response.iter_bytes():
+                raw.extend(chunk)
+                if len(raw)>262144:raise ValueError('large snapshot')
+            if response.status_code!=200:raise ValueError('missing snapshot')
+            rows=json.loads(raw)['models']
+            if not isinstance(rows,list) or any(not isinstance(r,dict) for r in rows):raise ValueError('invalid snapshot')
+        finally:response.close()
+        row=next(r for r in rows if r.get('name')==context['model'])
+        if type(row.get('context_length')) is not int or row['context_length']!=context['context_tokens']:
+            raise ProviderHTTPError('Ollama loaded a different context than the selected execution plan. The call completed but the plan could not be verified; inspect the local runtime before continuing.')
+        size=row.get('size');vram=row.get('size_vram')
+        if type(size) is not int or size<=0 or type(vram) is not int or not 0<=vram<=size:raise ValueError('missing allocation')
+        observation={'context_tokens':row['context_length'],'resident_bytes':size,'vram_bytes':vram}
+        from .diagnostic_evidence import record
+        record('local.model.loaded',**observation)
+        return observation
+    except ProviderHTTPError:raise
+    except (OSError,ValueError,KeyError,TypeError,StopIteration,httpx.HTTPError) as error:
+        raise ProviderHTTPError('Ollama completed the call but its loaded context and memory could not be verified. Inspect the local runtime before continuing.') from error
