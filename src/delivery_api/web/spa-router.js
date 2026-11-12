@@ -19,9 +19,10 @@ export function defineRoutes(defs,notFoundMount){
 }
 export function currentPath(){return location.pathname}
 export function navigate(path,{replace=false}={}){
-  if(path===location.pathname+location.hash)return;
+  const target=new URL(path,location.href);
+  if(target.href===location.href)return;
   history[replace?'replaceState':'pushState']({},'',path);
-  dispatch();
+  return dispatch();
 }
 export async function dispatch(){
   const path=location.pathname,hash=location.hash;

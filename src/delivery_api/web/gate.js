@@ -1,5 +1,6 @@
 import {activationAllowed} from './pointer-activation.js';
 import {Page} from './page-component.js';
+import {navigate} from './spa-router.js';
 import {Dialog} from './shared-dialog.js';
 import {runAction,beginFormPending} from './ui-action.js';
 import {api,esc,reveal} from './client-core.js';
@@ -47,6 +48,24 @@ async function gatePage(taskId,gateKey){
   });
  }
  const actionable=data.actionable;const form=document.querySelector('#gateform');form.onsubmit=e=>e.preventDefault();const host=document.querySelector('#gate-artifacts');
+ async function openCurrentAfterSave(message,ignoreNames=[]){
+  if(pageStale(at)||!host.isConnected)return;
+  // The saved item changes evidence identity. Mount a fresh authoritative review,
+  // but keep unrelated, unsaved founder text instead of silently discarding it.
+  const fields=[...form.elements,...host.querySelectorAll('[name]')].filter(field=>/^(selected_option|edited_text|steer|comment|next_model|redo_model|stack-(text|reason)-\d+)$/.test(field.name)&&!ignoreNames.includes(field.name));
+  const retained=fields.map(field=>({name:field.name,value:field.value}));
+  const remount=navigate(gateUrl(taskId,gateKey),{replace:true}),remountAt=pageEpoch();
+  await remount;
+  if(pageStale(remountAt)||location.pathname!==gateUrl(taskId,gateKey))return;
+  const current=document.querySelector('#gateform');if(!current||current===form)return;
+  for(const {name,value} of retained){
+   const field=current.elements[name]||[...current.closest('.gate-page').querySelectorAll('[name]')].find(f=>f.name===name);if(value===undefined||!field||field.disabled)continue;
+   if(field.tagName==='SELECT'&&![...field.options].some(o=>o.value===value))continue;
+   field.value=value;field.dispatchEvent(new Event('change',{bubbles:true}));
+  }
+  syncPills(current.closest('.gate-page'));
+  const status=current.querySelector('#gate-decision-status');if(status)status.textContent=message;
+ }
  let currentArtifacts=artifacts,currentPhaseArtifacts=phaseArtifacts,renderedArtifactKey=null,undecidedItems=0,undecidedStack=0,staleNote='',artifactFailures=[],gateCommitted=false,semanticSaved=false,stackSaved=false;
  function updateDecision(){
    const blockers=[];
@@ -60,7 +79,10 @@ async function gatePage(taskId,gateKey){
    if(undecidedStack)blockers.push({text:`${undecidedStack} architecture decision${undecidedStack===1?'':'s'} still open. Decide each one, then save.`,jump:'#stack-panel'});
    if(undecidedItems)blockers.push({text:`${undecidedItems} flagged input${undecidedItems===1?'':'s'} still need${undecidedItems===1?'s':''} a decision. Choose for each, then press Apply item decisions.`,jump:'#semantic-panel'});
    refreshDecision(form,blockers);
+   if(staleNote){const status=rootStatus();if(status&&!status.querySelector('[data-open-current]')){const link=document.createElement('a');link.href=gateUrl(taskId,gateKey);link.dataset.openCurrent='true';link.textContent='Open current gate';status.append(document.createTextNode(' '),link)}}
  }
+ function rootStatus(){return form.querySelector('#gate-decision-status')}
+
  function missingGateEvidence(){
    const invalid=currentPhaseArtifacts.filter(a=>a.present!==false&&a.valid===false);
    if(invalid.length){
@@ -98,7 +120,7 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
     const decisions=items.map((f,i)=>{const action=panel.querySelector(`[name="semantic-action-${i}"]`).value;if(!action)throw new Error('Choose for every flagged item.');return {item_id:f.item_id,action,...(action==='replace'?{replacement:readReplacement(panel,i,f.original)}:{})}});
     pending=beginFormPending(panel,{status,label:'Validating item decisions…'});if(!pending)return;
     await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/semantic-review`,{method:'POST',body:JSON.stringify({revision:semantic.revision,decisions})});
-    semanticSaved=true;pending.accepted();status.innerHTML=`Decisions saved. <a href="${gateUrl(taskId,gateKey)}">Open reviewed gate</a>`;
+    semanticSaved=true;pending.accepted();status.textContent='Decisions saved. Opening current evidence…';await openCurrentAfterSave('Item decisions saved. Review the updated requirements before approving.');
   }catch(error){pending?.release();status.textContent=error.message;if(error.status===409){staleNote='This review changed. Reload before deciding.';updateDecision()}}}).finally(()=>{panel.querySelector('#apply-semantic').disabled=semanticSaved||!!staleNote});
   if(!data.actionable)panel.querySelectorAll('textarea,select,button').forEach(c=>c.disabled=true);
  }
@@ -125,9 +147,7 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
     if(!text)throw new Error('Your change needs a choice.');
     pending=beginFormPending(panel,{status,label:'Saving technical choice…'});if(!pending)return;
     await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/stack-decisions`,{method:'POST',body:JSON.stringify({revision:stack.revision,decisions:[{key:stack.slots[i].key,text,reason}]})});
-    stackSaved=true;pending.accepted();status.innerHTML=`Change Saved. <a href="${gateUrl(taskId,gateKey)}">Open Reviewed Gate</a>`;
-    // Saved choice changed gate evidence. Review it rather than approve an old revision.
-    staleNote='Your saved change updated the evidence. Open the reviewed gate before deciding.';updateDecision();form.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);
+    stackSaved=true;pending.accepted();status.textContent='Change saved. Opening current evidence…';await openCurrentAfterSave('Change saved. Review the updated architecture before approving.',[`stack-text-${i}`,`stack-reason-${i}`]);
    }catch(error){pending?.release();status.textContent=error.message;if(error.status===409){staleNote='This review changed. Reload before deciding.';updateDecision()}}}).finally(()=>{save.disabled=stackSaved||!!staleNote});
   });
   if(!data.actionable)panel.querySelectorAll('textarea,input,button').forEach(c=>c.disabled=true);
@@ -144,7 +164,7 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
    gateRefreshPending=true;
    try{
      const live=await api(`/api/tasks/${taskId}`);
-     if(decisionPending())return;
+     if(decisionPending()||pageStale(at)||!host.isConnected)return;
      const control=live.control_snapshot;
      const current=live.gates.find(item=>item.gate_key===gateKey);
      if(control&&control.mode==='waiting_gate'&&control.wait_id!==gateKey)
@@ -156,13 +176,13 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
        return;
      }
      const updated=await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/review`);
-     if(decisionPending())return;
+     if(decisionPending()||pageStale(at)||!host.isConnected)return;
      if(updated.review.revision!==review.revision){document.querySelector('#gate-decision-status').textContent='Gate evidence changed. Reload the current gate before deciding.';staleNote='The gate evidence changed. Reload the current gate before deciding.';updateDecision();return}
      g.revision=current.revision;
      currentPhaseArtifacts=(live.artifacts||[]).filter(a=>a.phase_key===phase&&!a.stale);
      currentArtifacts=currentPhaseArtifacts.filter(a=>a.present!==false&&a.valid!==false);
      await renderGateArtifacts();
-   }catch(e){if(!decisionPending())document.querySelector('#gate-decision-status').textContent=`Could not refresh gate evidence: ${e.message}`}
+   }catch(e){if(!decisionPending()&&!pageStale(at)&&host.isConnected)document.querySelector('#gate-decision-status').textContent=`Could not refresh gate evidence: ${e.message}`}
    finally{gateRefreshPending=false}
  }
  onPageExit(()=>gateEvents.close());const gateEvents=new EventSource(`/api/tasks/${taskId}/stream`);
