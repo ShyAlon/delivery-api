@@ -57,5 +57,5 @@ export const GATE_COPY={
 };
 export function explainerHtml(key,overrides={}){
  const c={...(GATE_COPY[key]||{}),...overrides};if(!c.asks)return'';
- return boxHtml('What You Are Deciding Here',`<p><b>Phase:</b> ${esc(c.phase)}</p><p><b>Decision:</b> ${esc(c.asks)}</p>${(c.choices||[]).length?`<ul>${c.choices.map(([a,b])=>`<li><b>${esc(a)}:</b> ${esc(b)}</li>`).join('')}</ul>`:''}${c.next?`<p>${esc(c.next)}</p>`:''}`,{open:true}).replace('class="context-box"','class="explainer-box"');
+ return boxHtml('What You Are Deciding Here',`<p><b>Phase:</b> ${esc(c.phase)}</p><p><b>Decision:</b> ${esc(c.asks)}</p>${(c.choices||[]).length?`<ul>${c.choices.map(([a,b])=>`<li><b>${esc(a)}:</b> ${esc(b)}</li>`).join('')}</ul>`:''}${c.next?`<p>${esc(c.next)}</p>`:''}`,{open:false}).replace('class="context-box"','class="explainer-box"');
 }
