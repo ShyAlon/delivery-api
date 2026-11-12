@@ -34,3 +34,34 @@ def paid_child(store,endpoint):
             conn.execute('DELETE FROM expense_alert_outbox');conn.execute('DELETE FROM expense_guard_episodes');conn.execute('DELETE FROM expense_guard_policy')
             for table in ('retail_compute_segments','retail_contributions','credit_charges','provider_attempts','credit_accounts','admission_limits'):
                 conn.execute('DELETE FROM '+table+' WHERE owner_id=%s',(A.owner_id,))
+
+
+class InstalledGatewayFactory:
+    """The same test gateway adapter for every installed-runtime acceptance."""
+    verify_vendor = None
+
+    def __init__(self, factory, runtime):
+        self.factory = factory
+        self.models = runtime.models
+
+    def __call__(self, *args):
+        return self.factory(*args)
+
+    def refresh_launch(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def installed_child_command():
+    """Use the producers actually installed for this run, not sibling-path guesses."""
+    import sys
+    from pathlib import Path
+    import interview_engine, spec_generator
+    paths = [Path(__file__).parents[1] / 'src',
+             Path(interview_engine.__file__).parents[1],
+             Path(spec_generator.__file__).parents[1]]
+    return [sys.executable, '-c',
+            "import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",
+            *map(str, paths)]

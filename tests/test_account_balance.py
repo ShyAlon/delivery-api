@@ -57,7 +57,7 @@ def test_route_is_private_and_has_no_mode_bypass():
     assert 'store.own_credit_balance(' in body and 'store._db' not in body
 
 
-def test_store_method_reads_inside_a_scoped_transaction_and_a_direct_read_is_refused():
+def test_store_method_reads_inside_a_scoped_transaction_and_a_direct_read_is_refused(monkeypatch):
     from contextlib import contextmanager
     from contextvars import ContextVar
     from delivery_api.postgres_store import PostgresStore
@@ -74,15 +74,12 @@ def test_store_method_reads_inside_a_scoped_transaction_and_a_direct_read_is_ref
             return Cursor({'balance_units':5*10**9,'units_per_credit':10**9} if 'credit_accounts' in sql else None)
     conn=Conn()
 
-    class Postgres:
-        @contextmanager
-        def transaction(self,**kwargs):yield conn
-    store=PostgresStore.__new__(PostgresStore)
-    store._connection=ContextVar('scoped_transaction',default=None);store._postgres=Postgres();store._cache_dirty=ContextVar('cache_dirty',default=False)
+    from scoped_store_fixture import scoped_store
+    store,transactions=scoped_store(monkeypatch,conn)
     with pytest.raises(TenantAccessDenied):store._execute_native('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',('o',))
     with tenant_context(TenantScope('11111111-1111-4111-8111-111111111111')):
         assert store.own_credit_balance(Decimal('1'))=={'credits':5.0,'usd':5.0}
-    assert any('SAVEPOINT operation_start' in q for q in conn.sql) and any('credit_accounts' in q for q in conn.sql)
+    assert transactions==[{'savepoint':True}] and any('credit_accounts' in q for q in conn.sql)
 
 
 def run_node(code):

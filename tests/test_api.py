@@ -133,9 +133,14 @@ def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,
     from delivery_api.app import app
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'_state',None)
+    monkeypatch.setattr(cloud_runtime,'_failure_code','runtime_unavailable')
     body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get('/api/model-routes').json()
-    assert next(r for r in body['routes'] if r['id']=='ollama')['available'] is True
-    assert next(r for r in body['routes'] if r['id']=='deepseek')['available'] is False
+    # No installed runtime means neither route is ready. The retired
+    # env-only Ollama assumption must not bypass reviewed startup evidence.
+    assert {r['id'] for r in body['routes']}=={'deepseek','ollama'}
+    assert all(not r['available'] and r['reason']=='runtime_unavailable' for r in body['routes'])
     assert 'super-secret' not in str(body)
 
 

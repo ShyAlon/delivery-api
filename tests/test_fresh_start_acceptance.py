@@ -73,6 +73,10 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
     if not paid:env.update(local_env(MODEL))
     env.update(DELIVERY_CLOUD_EXECUTION='1',DELIVERY_CHILD_EXECUTION='local',INTERVIEW_ENGINE_TOKEN='acceptance-not-a-live-secret-0000',OLLAMA_BASE_URL=f'http://127.0.0.1:{vendor.server_port}/v1',INTERVIEW_ENGINE_OLLAMA_MODEL=MODEL)
     for key,value in env.items():monkeypatch.setenv(key,value)
+    # The producer module was imported during collection. Keep its real route
+    # preflight pointed at this run's fake HTTP origin, not an import-time URL.
+    from interview_engine import model_config as interview_models
+    monkeypatch.setitem(interview_models._BASE_URLS,'ollama',env['OLLAMA_BASE_URL'])
     if paid:
         for key,value in {'DELIVERY_CHILD_EXECUTION':'attended-paid','DELIVERY_PAID_CHILD_PREVIEW':'1','DELIVERY_PREVIEW':'1','DELIVERY_PUBLIC_ORIGIN':'http://127.0.0.1:8001','DEEPSEEK_API_KEY':'acceptance-fake-no-real-key'}.items():monkeypatch.setenv(key,value)
         env.update(DELIVERY_PAID_CHILD_PREVIEW='1')

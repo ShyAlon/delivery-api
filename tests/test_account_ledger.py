@@ -129,7 +129,7 @@ def test_route_is_private_goes_through_the_store_and_local_mode_says_unavailable
     assert 'CLOUD_TENANTS' not in body
 
 
-def test_store_method_runs_in_a_scoped_transaction():
+def test_store_method_runs_in_a_scoped_transaction(monkeypatch):
     from delivery_api.postgres_store import PostgresStore
     from delivery_api.tenancy import TenantAccessDenied,TenantScope,tenant_context
     inner=Db(ACCOUNT,[attempt(1)],[{'state':'settled','n':1}])
@@ -142,15 +142,12 @@ def test_store_method_runs_in_a_scoped_transaction():
         def execute(self,sql,params=()):
             self.sql.append(sql);return Cursor(inner.execute(sql,params))
     conn=Conn()
-    class Postgres:
-        @contextmanager
-        def transaction(self,**kw):yield conn
-    store=PostgresStore.__new__(PostgresStore)
-    store._connection=ContextVar('scoped_transaction',default=None);store._postgres=Postgres();store._cache_dirty=ContextVar('cache_dirty',default=False)
+    from scoped_store_fixture import scoped_store
+    store,transactions=scoped_store(monkeypatch,conn)
     with pytest.raises(TenantAccessDenied):store._execute_native('SELECT 1',())
     with tenant_context(TenantScope(A)):
         out=store.own_ledger(Decimal('1'))
-    assert out['calls']==1 and 'Credit balance' in out['text'] and any('SAVEPOINT operation_start' in q for q in conn.sql)
+    assert out['calls']==1 and 'Credit balance' in out['text'] and transactions==[{'savepoint':True}]
 
 
 def test_debug_dialog_shows_the_ledger_section_and_loads_it():

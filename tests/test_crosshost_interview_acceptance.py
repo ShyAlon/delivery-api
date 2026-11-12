@@ -63,13 +63,9 @@ def wait_http(url, seconds=30):
 @pytest.fixture(scope='module')
 def dsn():
     pg_harness.start()
-    value = pg_harness.STATE.get('dsn')
-    if not value:
-        pytest.skip('pg_harness unavailable: ' + pg_harness.STATE.get('reason', ''))
-    if 'dbname=test_tenant_' not in value:
-        pytest.skip('isolated test database required')
-    grant_founder_credits(value)
-    return value
+    with pg_harness.isolated_database() as value:
+        grant_founder_credits(value)
+        yield value
 
 
 def grant_founder_credits(dsn_value):
@@ -125,7 +121,6 @@ def base_env(root, keys, extra_pythonpath):
         # owner literal.
         'CROSSHOST_STUB_SESSION': '00000000-0000-0000-0000-0000000000a1',
         'CROSSHOST_STUB_ISSUER': 'https://supabase.crosshost.test/auth/v1',
-        'DELIVERY_COOKIE_SECURE': '0',
     })
     return env
 
@@ -192,6 +187,7 @@ class AdmittedHost:
         price_table.write_text(json.dumps({'deepseek-flash': [0.30, 1.20], 'qwen2.5-coder:14b': [0.0, 0.0]}))
         env.update({
             'DELIVERY_DATABASE_URL': app_dsn_uri(dsn_value),
+            'DELIVERY_PUBLIC_ORIGIN': f'http://127.0.0.1:{self.port}',
             'DELIVERY_SUPABASE_URL': 'https://supabase.crosshost.test',
             'DELIVERY_SUPABASE_ANON_KEY': 'crosshost-stub-anon',
             'DELIVERY_CLOUD_EXECUTION': '1',
@@ -704,6 +700,16 @@ def test_answer_composer_shadow_tracks_input_id_not_question_text(dsn, keys, tmp
 
             key = 'shadow-answer:%s' % task_id
             first = served()
+            # Hold browser delivery at the served input while the real backend
+            # advances. A fast child may publish the next input before Playwright
+            # sees the transient processing shadow. Do not delay the product.
+            task_url = host.base + '/api/tasks/' + task_id
+            before_submit = page.request.get(task_url)
+            assert before_submit.ok, before_submit.text()
+            held_snapshot = before_submit.json()
+            def hold_next_snapshot(route):
+                route.fulfill(json=held_snapshot)
+            page.route(task_url, hold_next_snapshot)
             # Real submit through the composer captures the served input_id.
             page.locator('#answerform textarea[name="answer"]').fill('Customers pick a slot and pay online.')
             page.locator('#answerform button[type="submit"]').click()
@@ -711,7 +717,13 @@ def test_answer_composer_shadow_tracks_input_id_not_question_text(dsn, keys, tmp
             shadow = page.evaluate("JSON.parse(sessionStorage.getItem(%r))" % key)
             assert shadow['input_id'] == first['input_id'], shadow
 
-            cur = served()  # the next waiting input, whatever the engine asked
+            page.unroute(task_url, hold_next_snapshot)
+            deadline = time.monotonic() + 15
+            cur = served()
+            while cur['input_id'] == first['input_id'] and time.monotonic() < deadline:
+                page.wait_for_timeout(50)
+                cur = served()
+            assert cur['input_id'] != first['input_id'], cur
             import json as _json
 
             def seed(record):

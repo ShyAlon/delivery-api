@@ -16,7 +16,8 @@ def test_concept_submit_keeps_the_new_approval_review_mounted(dsn,keys,tmp_path_
             page.locator('#startengine').click()
             answers=['Customers pick a slot and pay online.','They pay by card when they book.','Rainy days are automatically refunded.']
             pump_interview(page,host.base,tid,answers,finish=False,timeout=30)
-            page.locator('#opendecision').click()
+            # The current UI may already auto-open the concept decision.
+            # Requiring a launcher after navigation races the real route.
             page.wait_for_url('**/decisions/**')
             page.locator('input[name="choice"]').first.check()
             page.locator('textarea[name="rationale"]').fill('Deterministic first concept')

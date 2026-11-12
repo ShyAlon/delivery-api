@@ -119,25 +119,7 @@ def start(*,database_prefix='test_tenant_',socket_directory=None,server_factory=
             admin.execute('CREATE DATABASE "%s"'%dbname)
             admin.execute(ROLES)   # roles belong to the whole server, not one database
         with psycopg.connect(dsn,autocommit=True) as conn:
-            conn.execute(SUPABASE_STAND_IN)
-            conn.execute(SUPABASE_DEFAULT_ACL)
-            files=sorted(p for p in MIGRATIONS.glob('*.sql') if _numbered(p))
-            if not files:
-                STATE.update(status='failed',reason='no migration files found in %s'%MIGRATIONS);return
-            for path in files:
-                try:conn.execute(path.read_text())
-                except Exception as exc:
-                    STATE.update(status='failed',reason='%s did not apply: %s: %s'%(path.name,type(exc).__name__,str(exc).strip()[:400]),applied=list(STATE['applied']));return
-                STATE['applied'].append(path.name)
-            # Mirror the real owner installer exactly; wildcard grants masked
-            # missing production memberships such as payment-read and log-write.
-            import runpy
-            roles=runpy.run_path(str(MIGRATIONS.parent.parent/'src/delivery_api/runtime_roles.py'))['RUNTIME_ROLES']
-            for role in roles:
-                conn.execute('GRANT "%s" TO delivery_app WITH INHERIT FALSE, SET TRUE'%role)
-            try:conn.execute(SEED)
-            except Exception as exc:
-                STATE.update(status='failed',reason='seeding the test owners failed: %s: %s'%(type(exc).__name__,str(exc).strip()[:300]));return
+            STATE['applied'] = initialize_database(conn)
     except Exception as exc:
         STATE.update(status='failed',reason='%s: %s'%(type(exc).__name__,str(exc)[:300]));return
     # Some tests shell out to psql. Use the copy that ships with pgserver, so nothing has to be installed on the developer's machine.
@@ -148,3 +130,56 @@ def start(*,database_prefix='test_tenant_',socket_directory=None,server_factory=
     except Exception:pass
     os.environ['DELIVERY_TEST_POSTGRES_DSN']=dsn
     STATE.update(status='running',dsn=dsn)
+
+
+def initialize_database(conn):
+    """One migration/seed recipe for every owned disposable database."""
+    import runpy
+    conn.execute(SUPABASE_STAND_IN)
+    conn.execute(SUPABASE_DEFAULT_ACL)
+    files = sorted(p for p in MIGRATIONS.glob('*.sql') if _numbered(p))
+    if not files:
+        raise RuntimeError('no migration files found in %s' % MIGRATIONS)
+    applied = []
+    for path in files:
+        try:
+            conn.execute(path.read_text())
+        except Exception as exc:
+            raise RuntimeError('%s did not apply: %s' % (path.name, exc)) from exc
+        applied.append(path.name)
+    roles = runpy.run_path(str(MIGRATIONS.parent.parent / 'src/delivery_api/runtime_roles.py'))['RUNTIME_ROLES']
+    for role in roles:
+        conn.execute('GRANT "%s" TO delivery_app WITH INHERIT FALSE, SET TRUE' % role)
+    conn.execute(SEED)
+    return applied
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def isolated_database():
+    """Own one fresh database on our server, including cleanup after failures.
+
+    A long UI acceptance run must not lend its founder credits, operator grant
+    or model pins to unrelated ledger tests. Never connect to a caller's DSN.
+    """
+    import uuid
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    if STATE['status'] != 'running':
+        raise RuntimeError('owned running Postgres required')
+    fields = conninfo_to_dict(STATE['dsn'])
+    if not fields['dbname'].startswith(('test_tenant_', 'requi_item6_')) or fields.get('user') != 'sandbox':
+        raise RuntimeError('owned disposable Postgres required')
+    name = 'test_tenant_' + uuid.uuid4().hex
+    maintenance = make_conninfo(STATE['dsn'], dbname='postgres')
+    dsn = make_conninfo(STATE['dsn'], dbname=name)
+    with psycopg.connect(maintenance, autocommit=True) as admin:
+        admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
+        try:
+            with psycopg.connect(dsn, autocommit=True) as conn:
+                initialize_database(conn)
+            yield dsn
+        finally:
+            admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(name)))
