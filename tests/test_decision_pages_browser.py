@@ -427,8 +427,9 @@ def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p.screenshot(path='/tmp/reference-review-desktop.png',full_page=True)
  p.set_viewport_size({'width':390,'height':844})
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
- # ResizeObserver applies the measured shared strip on the next layout frame.
- expect(p.locator('.semantic-footer')).to_have_css('position','fixed')  # Still require the fixed phone strip.
+ # Shared Page owns the scoped footer too, over pending-form legacy styles.
+ expect(p.locator('.semantic-footer')).to_have_css('position','fixed')
+ assert p.locator('.semantic-footer').evaluate('e=>getComputedStyle(e).backgroundColor') not in ('transparent','rgba(0, 0, 0, 0)')
  p.locator('.semantic-item').scroll_into_view_if_needed()
  p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
  p.screenshot(path='/tmp/reference-review-mobile.png',full_page=True)

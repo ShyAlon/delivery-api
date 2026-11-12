@@ -10,12 +10,11 @@ main.has-shared-actions{padding-bottom:calc(var(--shared-action-reserve,0px) + 2
 body.ops-page #app,body.ops-page #frame{height:auto!important;min-height:0;flex:none!important}
 body.ops-page #panels{grid-template-rows:auto auto!important;flex:none!important}
 body.ops-page .panel,body.ops-page .scroll,.private-workspace .scroll,.private-workspace .force-plan{height:auto!important;max-height:none!important;overflow-y:visible!important}
-#semanticform .shared-action-strip,.shared-action-strip{position:fixed}
 #semanticform .shared-action-strip.readonly,#semanticform .shared-action-strip.historical-review,.shared-action-strip.readonly,.shared-action-strip.historical-review{position:static;box-shadow:none}
 
 .gate-controls{position:static!important;max-height:none!important;overflow:visible!important;margin-top:24px}
 .decision-options,.decision-body,.gate-evidence,.gate-artifact,.gate-structured,.context-body,.qa-history,.qa-items,.live-console,.console,.artifact-readable,.json-view,.feedback-context,.decision-scroll,.artifact-content,#node-detail{max-height:none!important;height:auto!important;overflow-y:visible!important}
-.shared-action-strip{position:fixed;left:0;right:0;bottom:0;z-index:7;padding:10px max(20px,4.5vw) calc(10px + env(safe-area-inset-bottom));background:var(--card,#f5f5ee);border-top:1px solid var(--line,#d7ddd4);box-shadow:0 -5px 20px #17211d12;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
+#semanticform .shared-action-strip,.shared-action-strip{position:fixed;left:0;right:0;bottom:0;z-index:7;padding:10px max(20px,4.5vw) calc(10px + env(safe-area-inset-bottom));background:var(--card,#f5f5ee);border-top:1px solid var(--line,#d7ddd4);box-shadow:0 -5px 20px #17211d12;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
 .shared-action-strip .gate-page-actions,.shared-action-strip>.actions{display:flex!important;gap:10px;margin:0!important;flex:1;align-items:center}
 .shared-action-strip .gate-page-actions .primary,.shared-action-strip>.actions .primary{order:-1;flex:1}
 .shared-action-strip .decision-checklist{margin:0;padding:6px 10px;flex:1;min-width:200px}
