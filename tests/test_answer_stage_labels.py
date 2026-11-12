@@ -18,7 +18,9 @@ def _run(tmp_path, body):
     for source in WEB.glob('*.js'):
         (tmp_path / source.name).write_text(source.read_text())
     run = tmp_path / 'run.mjs'
-    run.write_text(textwrap.dedent(body))
+    # Shared navigation instrumentation wraps native history methods at import.
+    # These pure label tests need the browser API shape, not a real navigation.
+    run.write_text('globalThis.history={pushState(){},replaceState(){}};\n'+textwrap.dedent(body))
     result = subprocess.run(['node', str(run)], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()

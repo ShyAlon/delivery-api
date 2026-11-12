@@ -13,5 +13,5 @@ with tempfile.TemporaryDirectory() as temp:
     if result.returncode:raise SystemExit(result.returncode)
     if not report.exists():raise SystemExit('Acceptance produced no result')
     cases=ET.parse(report).findall('.//testcase')
-    if len(cases)!=2 or any(c.find(tag) is not None for c in cases for tag in ('skipped','failure','error')):
-        raise SystemExit('Acceptance requires exactly two passing scenarios, zero skips')
+    if len(cases)!=4 or any(c.find(tag) is not None for c in cases for tag in ('skipped','failure','error')):
+        raise SystemExit('Acceptance requires exactly four passing scenarios (paid, reviewed local, registry Qwen3 and registry Qwen3.5), zero skips')

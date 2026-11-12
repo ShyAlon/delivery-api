@@ -2,7 +2,7 @@
 import json
 from contextlib import contextmanager
 from .child_channel import json_channel
-from .child_provider_broker import ProviderRefused
+from .child_provider_broker import ProviderRefused,LocalPlanRefused
 
 
 @contextmanager
@@ -19,7 +19,7 @@ def provider_broker_channel(broker):
             import sys
             from .child_failure import project
             print('parent broker failure '+json.dumps(project(error),separators=(',',':')),file=sys.stderr,flush=True)
-            if isinstance(error,ProviderRefused):refusal.append(error)
+            if isinstance(error,(ProviderRefused,LocalPlanRefused)):refusal.append(error)
             raise
     try:
         with json_channel(dispatch,limit=2*1024*1024,name='broker',

@@ -81,3 +81,29 @@ actual requests before provider dispatch. It cannot predict future user-supplied
 content growth at Start. Do not advertise universal full-cycle fit. Add further
 model entries only with grounded identity, output examples/capability, current
 server controls and fake end-to-end tests. No automatic model substitution.
+
+## Final review additions
+
+Public-origin deployments omit Ollama and do not probe it, even when an explicit
+local endpoint is configured. Local unconfigured DeepSeek is not offered. Native
+approved heads cannot bypass live package/capability checks. Read-only inventory
+is cached for five seconds; Start explicitly refreshes it. Failed paid launch
+verification also excludes that provider from selection.
+
+Native transport sends `truncate:false` and `shift:false`, not Ollama defaults.
+The supported server floor for these reviewed controls is 0.17.1, checked against
+https://raw.githubusercontent.com/ollama/ollama/v0.17.1/api/types.go and
+https://raw.githubusercontent.com/ollama/ollama/v0.17.1/server/routes.go .
+Older or unverified server versions cannot offer these native registry entries.
+A pre-dispatch plan refusal is retained as a fixed parent-generated message:
+no call was made and no input was truncated. It is not an uncertain charge.
+
+The vendor-wheel mandatory acceptance now requires four passing scenarios,
+including both registry model families. Both native flags are asserted at fake
+HTTP endpoints. Host memory, resource-fit estimation, and memory-pressure checks
+are explicitly the next stage; 131072 is an application context, not a measured
+fit on the owner's Mac. No model has been loaded on the owner's machine.
+
+Pure Node label/progress fixtures now provide native history method stubs. The
+shared browser instrumentation already used those methods on main; the fixtures
+were missing the browser API, not an assertion failure to weaken.

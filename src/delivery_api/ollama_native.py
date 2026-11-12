@@ -23,7 +23,7 @@ def prepare(raw,context):
     options={'num_ctx':context['context_tokens'],'num_predict':cap}
     for key in ('temperature','top_p','seed','stop'):
         if key in value:options[key]=value[key]
-    payload={'model':model,'messages':value['messages'],'stream':False,'think':False,'options':options}
+    payload={'model':model,'messages':value['messages'],'stream':False,'think':False,'truncate':False,'shift':False,'options':options}
     if 'keep_alive' in value:payload['keep_alive']=value['keep_alive']
     fmt=value.get('response_format')
     if fmt:

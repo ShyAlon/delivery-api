@@ -126,7 +126,7 @@ class DurableGateways:
     """One immutable reviewed pin set per task generation, restored for every job."""
     def __init__(self,store,environ):
         import threading
-        self.store=store;self.environ=dict(environ);self._factories={};self._lock=threading.RLock();self._launch_errors={};self.route_errors={}
+        self.store=store;self.environ=dict(environ);self._factories={};self._lock=threading.RLock();self._launch_errors={};self.route_errors={};self._local_snapshot=None;self._local_snapshot_at=0
     def _factory(self,env):
         key=revision({k:json.loads(v) for k,v in env.items()})
         with self._lock:
@@ -144,9 +144,17 @@ class DurableGateways:
                     child.verify_vendor=verify;factory.verify_vendor=verify
                 self._factories[key]=factory
         return self._factories[key]
-    def registry(self):
-        from .model_registry import discover
-        return discover(PinRepository(self.store._postgres).list(),self.environ)
+    def registry(self,fresh=False):
+        import time
+        from .model_registry import discover,local_deployment,ollama_base,probe
+        with self._lock:
+            now=time.monotonic()
+            if fresh or self._local_snapshot is None or now-self._local_snapshot_at>=5:
+                self._local_snapshot=probe(ollama_base(self.environ)) if local_deployment(self.environ) else {'reachable':False}
+                self._local_snapshot_at=time.monotonic()
+            records=discover(PinRepository(self.store._postgres).list(),self.environ,self._local_snapshot)
+            return [r for r in records if r['provider'] not in self._launch_errors]
+    def refresh_registry(self):return self.registry(fresh=True)
     def available_environment(self):
         """Resolve each explicitly configured provider independently, never a substitute model.
 
@@ -183,7 +191,7 @@ class DurableGateways:
             if selection is None:chosen=self.available_environment()
             else:
                 from .model_registry import resolve
-                chosen=environment([resolve(self.registry(),*selection)['payload']])
+                chosen=environment([resolve(self.refresh_registry(),*selection)['payload']])
             self.store.retain_decision_review(task_id,name,'model-pins-v1',chosen)
             old=self.store.decision_review(task_id,name,'model-pins-v1')
         factory=self._factory(old)

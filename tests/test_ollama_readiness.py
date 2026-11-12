@@ -75,7 +75,25 @@ def test_owned_container_check_uses_running_settings_without_writes(monkeypatch,
   return SimpleNamespace(returncode=0,stdout=json.dumps({'reachable':False,'model_selected':False,'ollama_provider_selected':False,'endpoint_topology':'container_loopback'}))
  monkeypatch.setattr(m.subprocess,'run',run)
  report=m.diagnose(source(tmp_path),home)
- assert len(calls)==2 and len(report['missing'])==4
+ assert len(calls)==2 and len(report['missing'])==2
+ assert 'No launch-model setting or operator pin is required' in report['approved_pin_note']
  assert report['mac_physical_ram_bytes']==8*1024**3 and report['memory_fit']=='unverified'
  assert 'production.invalid' not in str(report) and 'must-not-cross' not in str(report)
  assert identity.exists()
+
+
+@pytest.mark.parametrize('version,ready',[('0.17.1',True),('0.18.0',True),('0.16.0',False),('unknown',False)])
+def test_native_models_require_verified_no_truncation_controls(monkeypatch,version,ready):
+ class Response(io.BytesIO):
+  def __enter__(self):return self
+  def __exit__(self,*a):self.close()
+ class Opener:
+  def open(self,request,timeout):
+   if request.full_url.endswith('/api/version'):data={'version':version}
+   elif request.full_url.endswith('/api/show'):data={'capabilities':['completion','thinking'],'thinking':{'values':[True,False]},'model_info':{'general.architecture':'qwen','qwen.context_length':32768}}
+   else:data={'models':[{'name':'qwen3:8b','digest':'500a1f067a9f'+'a'*52}]}
+   return Response(json.dumps(data).encode())
+ monkeypatch.setattr(reader,'build_opener',lambda *a:Opener())
+ report=probe('http://localhost:11434/v1','qwen3:8b')
+ assert report['reachable']
+ assert ('native_context' in report['installed_models'][0]) is ready

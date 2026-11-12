@@ -104,3 +104,17 @@ def test_parent_transport_cause_is_safe_and_visible_when_child_only_gets_eof(cap
     text=capsys.readouterr().err
     assert 'ConnectError' in text and 'SSLCertVerificationError' in text
     assert 'private' not in text and len(calls)==1
+
+
+def test_local_pre_dispatch_refusal_survives_eof_without_uncertain_attempt():
+    from delivery_api.child_provider_broker import LocalPlanRefused
+    broker,g,j,calls=setup()
+    def refuse(value):raise LocalPlanRefused()
+    broker.dispatch=refuse
+    with pytest.raises(LocalPlanRefused,match='No provider call was made'):
+        with provider_broker_channel(broker) as channel:
+            client=BrokerClient(channel.fileno(),next_call_id=lambda stage:'refused-1')
+            try:
+                with pytest.raises(BrokerUnavailable):client.request(stage='intent',provider='deepseek',model='deepseek-flash',raw=b'{}')
+            finally:client.close()
+    assert calls==[] and g.calls==[] and j.row is None

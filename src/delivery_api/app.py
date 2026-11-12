@@ -1073,6 +1073,7 @@ def _ollama_route_choice(model=None,*,managed=False):
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
     from . import cloud_runtime
+    from .model_registry import local_deployment
     gateway=cloud_runtime.gateway_factory()
     open_now=cloud_execution_admitted()
     admitted_models=getattr(gateway,'models',{}) if gateway else {}
@@ -1085,13 +1086,15 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         # This is the customer workspace, including when the actor is an admin.
         message='No approved interview model is configured. Ask the operator to set one up.' if reason=='no_approved_model_pin' else 'Interviews are unavailable because the execution runtime is not ready. Ask the operator to check startup evidence.'
         return {'routes':[{'id':route,'available':False,'managed':True,'reason':reason,'error':message,
-            'operator_repair':False} for route in ('deepseek','ollama')],
+            'operator_repair':False} for route in ('deepseek','ollama') if (route!='ollama' or local_deployment(os.environ)) and (route!='deepseek' or os.environ.get('DEEPSEEK_API_KEY','').strip())],
             'default_route':None,'managed':True}
 
     if gateway is not None and hasattr(gateway,'registry'):
-        from .model_registry import unsupported,phase_budgets
+        from .model_registry import unsupported,phase_budgets,local_deployment
         records=gateway.registry();routes=[]
         for provider in ('deepseek','ollama'):
+            if provider=='ollama' and not local_deployment(os.environ):continue
+            if provider=='deepseek' and not os.environ.get('DEEPSEEK_API_KEY','').strip():continue
             options=[r for r in records if r['provider']==provider]
             choices=[]
             for record in options:
@@ -1155,7 +1158,7 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     if canonical is not None and hasattr(canonical,'registry'):
         from .model_registry import resolve
         from .model_pins import environment
-        records=canonical.registry()
+        records=getattr(canonical,'refresh_registry',canonical.registry)()
         if initial_model is None:
             selected=next((r for r in records if r['provider']==selected_route and r['is_default']),None)
             initial_model=selected['model'] if selected else None
@@ -1200,7 +1203,9 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         if not configured(store):
             activity('operator.expense_policy.missing','Provider dispatch blocked: operator expense policy missing',task_id=task_id)
             raise HTTPException(503,'This model is temporarily unavailable. Please choose another available model or try later.')
-    if (hasattr(installed,'for_task')):installed.for_task(task_id,(selected_route,model))
+    if hasattr(installed,'for_task'):
+        try:installed.for_task(task_id,(selected_route,model))
+        except ValueError as exc:raise HTTPException(422,str(exc))
     proposed_session=str(uuid4())
     if not store.begin_interview_start(task_id,proposed_session,selected_route):
         raise HTTPException(409,"task already started")

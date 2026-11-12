@@ -28,6 +28,19 @@ LOCAL_MODELS={
 }
 
 
+def local_deployment(environ):
+    """Publicly hosted deployments never offer the user's computer as a route.
+
+    Owned local PG is launched with a loopback public origin. Do not use an
+    endpoint's reachability as evidence that the deployment should expose it.
+    """
+    from urllib.parse import urlsplit
+    origin=environ.get('DELIVERY_PUBLIC_ORIGIN','')
+    if not origin:return True # legacy process/test configuration, no remote profile
+    try:return urlsplit(origin).hostname in ('localhost','127.0.0.1','::1')
+    except ValueError:return False
+
+
 def native_model(model):return model in LOCAL_MODELS
 
 
@@ -57,12 +70,13 @@ def unsupported(context,budgets):
     return [f'{stage} needs {need} output tokens; this model allows {cap}.' for stage,need in budgets.items() if need>cap]
 
 
-def discover(heads,environ):
+def discover(heads,environ,listing=None):
     """Only known installed packages or approved paid heads. No env model choice."""
     from .model_pins import validate
     records=[]
     for head in heads:
         if head['provider'] not in ('deepseek','ollama'):continue
+        if head['provider']=='ollama' and not local_deployment(environ):continue
         if head['provider']=='deepseek' and not environ.get('DEEPSEEK_API_KEY','').strip():continue
         try:payload=validate(head['payload'])
         except (ValueError,KeyError,TypeError):continue
@@ -70,7 +84,8 @@ def discover(heads,environ):
         if head.get('model',model)!=model or payload['row']['provider']!=head['provider']:continue
         records.append({'id':head['provider']+':'+model,'provider':head['provider'],'model':model,
             'payload':payload,'is_default':head.get('is_default',False),'source':'approved-pin'})
-    listing=probe(ollama_base(environ))
+    if listing is None:listing=probe(ollama_base(environ)) if local_deployment(environ) else {'reachable':False}
+    ready_native=set()
     if listing.get('reachable'):
         for model in listing.get('installed_models',[]):
             try:
@@ -80,12 +95,14 @@ def discover(heads,environ):
                 if 'completion' not in caps or not any(type(v) is bool and v is False for v in controls.get('values',[])):continue
                 if type(model.get('native_context')) is not int or model['native_context']<payload['context']['context_tokens']:continue
             except (ValueError,KeyError,TypeError):continue
+            ready_native.add(model['id'])
             # Explicit operator review remains authoritative when present.
             if any((r['provider'],r['model'])==('ollama',model['id']) for r in records):continue
             records.append({'id':'ollama:'+model['id'],'provider':'ollama','model':model['id'],
                 'payload':payload,'is_default':True,'source':'verified-local-package'})
     # One runtime bootstrap default per provider; exact UI selection can name
     # any ready entry. Prefer the newly selected family, never a hidden fallback.
+    records=[r for r in records if r['provider']!='ollama' or not native_model(r['model']) or r['model'] in ready_native]
     local=[r for r in records if r['provider']=='ollama']
     local.sort(key=lambda r:(r['model']!='qwen3.5:9b',r['model']))
     for index,record in enumerate(local):record['is_default']=index==0

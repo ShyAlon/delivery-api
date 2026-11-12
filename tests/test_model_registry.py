@@ -81,6 +81,7 @@ def test_native_transport_enforces_context_and_preserves_usage_and_length():
         assert request.url.path=='/api/chat'
         assert body['options']=={'num_ctx':32768,'num_predict':12288,'temperature':0.2}
         assert body['think'] is False and body['stream'] is False
+        assert body['truncate'] is False and body['shift'] is False
         assert body['messages']==[{'role':'user','content':'a full request'}]
         assert body['format']=={'type':'object'}
         return httpx.Response(200,json={'done':True,'done_reason':'length','message':{'role':'assistant','content':'partial'},'prompt_eval_count':12,'eval_count':12288})
@@ -158,3 +159,61 @@ def test_qwen35_keeps_larger_context_and_model_card_output_envelope():
     native=prepare(raw,value['context'])
     assert native['options']['num_ctx']==131072
     assert native['think'] is False and len(native['messages'][0]['content'])==40000
+
+
+def test_remote_profile_never_probes_lists_or_selects_local_even_if_reachable(monkeypatch):
+    monkeypatch.setattr(registry,'probe',lambda *a:(_ for _ in ()).throw(AssertionError('remote must not probe local endpoint')))
+    local=registry.local_capability('qwen3.5:9b','56671c2ab938'+'a'*52)
+    env={'DELIVERY_PUBLIC_ORIGIN':'https://requi.example','OLLAMA_BASE_URL':'http://host.docker.internal:11434/v1'}
+    records=registry.discover([{'provider':'ollama','model':'qwen3.5:9b','payload':local,'is_default':True}],env)
+    assert records==[]
+    with pytest.raises(ValueError,match='not ready'):registry.resolve(records,'ollama','qwen3.5:9b')
+
+
+def test_remote_model_api_does_not_list_ollama(monkeypatch):
+    from types import SimpleNamespace
+    from delivery_api import app as module,cloud_runtime
+    monkeypatch.setenv('DELIVERY_PUBLIC_ORIGIN','https://requi.example')
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={},registry=lambda:[]))
+    assert [r['id'] for r in module.model_routes()['routes']]==['deepseek']
+
+
+@pytest.mark.parametrize('ready',[True,False])
+def test_unconfigured_paid_provider_is_not_listed_locally(monkeypatch,ready):
+    from types import SimpleNamespace
+    from delivery_api import app as module,cloud_runtime
+    monkeypatch.setenv('DELIVERY_PUBLIC_ORIGIN','http://localhost:8090')
+    monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:ready)
+    monkeypatch.setattr(cloud_runtime,'unavailable_reason',lambda:'test_closed')
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={},registry=lambda:[]))
+    assert [r['id'] for r in module.model_routes()['routes']]==['ollama']
+
+
+def test_discovery_snapshot_is_bounded_but_start_refreshes_and_paid_errors_stay_closed(store,monkeypatch):
+    from delivery_api import model_pins
+    from test_production_gateway import row,CEILING
+    calls=[]
+    monkeypatch.setattr(registry,'probe',lambda *a:calls.append(a) or local_listing())
+    paid={'provider':'deepseek','model':row()['model'],'is_default':True,'payload':{'row':row(),'context':dict(CEILING)}}
+    monkeypatch.setattr(model_pins.PinRepository,'list',lambda self:[paid])
+    factory=model_pins.DurableGateways(store,{'DEEPSEEK_API_KEY':'test-only'})
+    try:
+        assert len(factory.registry())==2
+        assert len(factory.registry())==2 and len(calls)==1
+        assert len(factory.refresh_registry())==2 and len(calls)==2
+        factory._launch_errors['deepseek']='Vendor terms changed'
+        assert [r['provider'] for r in factory.registry()]==['ollama']
+        with pytest.raises(ValueError,match='not ready'):registry.resolve(factory.registry(),'deepseek',row()['model'])
+        factory._local_snapshot_at=0
+        factory.registry();assert len(calls)==3
+    finally:factory.close()
+
+
+def test_approved_native_head_cannot_bypass_missing_live_capabilities(monkeypatch):
+    payload=registry.local_capability('qwen3:8b',registry.QWEN_DIGEST+'a'*52)
+    head={'provider':'ollama','model':'qwen3:8b','payload':payload,'is_default':True}
+    monkeypatch.setattr(registry,'probe',lambda *a:{'reachable':False})
+    assert registry.discover([head],{})==[]

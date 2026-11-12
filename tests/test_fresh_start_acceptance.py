@@ -25,6 +25,7 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
     class Provider(BaseHTTPRequestHandler):
         def do_GET(self):
             data={'models':[{'name':MODEL,'size':5200000000,'digest':('56671c2ab938' if MODEL=='qwen3.5:9b' else '500a1f067a9f')+'a'*52}]} if registry_model and self.path in ('/api/tags','/api/ps') else {'data':[{'id':MODEL}]}
+            if registry_model and self.path=='/api/version':data={'version':'0.17.1'}
             body=json.dumps(data).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def do_POST(self):
@@ -45,6 +46,7 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             if registry_model:
                 assert self.path=='/api/chat'
                 assert payload['options']['num_ctx']==(131072 if MODEL=='qwen3.5:9b' else 32768) and payload['think'] is False
+                assert payload['truncate'] is False and payload['shift'] is False
                 body=json.dumps({'model':MODEL,'done':True,'done_reason':'stop','message':message,'prompt_eval_count':10,'eval_count':1}).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def log_message(self,*a):pass

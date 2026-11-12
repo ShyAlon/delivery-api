@@ -170,6 +170,7 @@ def test_review_progress_poll_backs_off_while_the_stream_is_open():
     from pathlib import Path
     uri = (Path(__file__).parent.parent / 'src' / 'delivery_api' / 'web' / 'progress.js').as_uri()
     src = """
+globalThis.history={pushState(){},replaceState(){}};
 globalThis.window={addEventListener(){}};globalThis.document={addEventListener(){}};
 const m=await import('%s');
 const M=m.REVIEW_POLL_STREAM_MS;
