@@ -1860,11 +1860,21 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Re
                           for e in task_events))
     if starting and task.get("state")=="running":
         input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
-    elif (session_id):
+    elif session_id and task.get("active_phase") in ("intent","conops"):
         snapshot,input_state=_cloud_engine_read(task_id,task,session_id,events=task_events)
     else:input_state=({"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None})
-    work=None
-    work_state=None
+    # The interview session is complete before generator phases start. Only
+    # the current runner can establish local liveness, not a stale interview
+    # snapshot or a durable worker row left running after a crash.
+    work=runner.work_state(task_id)
+    if work is not None and (work.phase!=task.get("active_phase") or
+            task.get("active_phase") in ("intent","conops") or
+            task.get("state") not in ("running","waiting_gate") or
+            work.status not in ("running","waiting")):
+        work=None
+    work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,
+                 "started_at":work.started_at,"requirement":work.requirement} if work else None)
+    if work is not None:input_state=work.input_state()
     artifacts=_task_artifact_snapshot(task_id,task=task,session=session_id,events=task_events,stored_artifacts=read_snapshot["artifacts"],manifest=read_snapshot["manifest"]);session=_recorded_engine_session(task_id,recorded=session_id,events=task_events)
     from .phases import PHASE_DEFINITIONS
     phase_config={phase.key:{"executor":phase.executor,"generator_stage":phase.generator_stage,
