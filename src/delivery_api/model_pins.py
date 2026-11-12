@@ -144,17 +144,20 @@ class DurableGateways:
                     child.verify_vendor=verify;factory.verify_vendor=verify
                 self._factories[key]=factory
         return self._factories[key]
+    def registry(self):
+        from .model_registry import discover
+        return discover(PinRepository(self.store._postgres).list(),self.environ)
     def available_environment(self):
         """Resolve each explicitly configured provider independently, never a substitute model.
 
         A missing or invalid paid pin must not erase an independently valid local
         route. Unavailable providers remain named in route_errors and cannot dispatch.
         """
-        rows=PinRepository(self.store._postgres).list();selected=[];errors={}
+        rows=self.registry();selected=[];errors={}
         if not rows:
             self.route_errors={provider:'No approved model pin' for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(',')}
-            raise NoApprovedModelPin('No approved model pin. Approve one in Back office > Model pins.')
-        for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
+            raise NoApprovedModelPin('No ready reviewed route: no compatible approved model or verified local package.')
+        for provider in ('deepseek','ollama'):
             try:
                 if provider in self._launch_errors:raise ValueError(self._launch_errors[provider])
                 candidates=[r for r in rows if r['provider']==provider and r['is_default']]
@@ -172,14 +175,20 @@ class DurableGateways:
     @property
     def verify_vendor(self):
         return self._factory(self.available_environment()).verify_vendor
-    def for_task(self,task_id):
+    def for_task(self,task_id,selection=None):
         pin=self.store.task_model_pin(task_id)
         if pin is None:raise KeyError(task_id)
         name='model-pins:'+str(pin['generation']);old=pin['environment']
         if old is None:
-            self.store.retain_decision_review(task_id,name,'model-pins-v1',self.available_environment())
+            if selection is None:chosen=self.available_environment()
+            else:
+                from .model_registry import resolve
+                chosen=environment([resolve(self.registry(),*selection)['payload']])
+            self.store.retain_decision_review(task_id,name,'model-pins-v1',chosen)
             old=self.store.decision_review(task_id,name,'model-pins-v1')
-        return self._factory(old)
+        factory=self._factory(old)
+        if selection is not None and factory.models.get(selection[0])!=selection[1]:raise ValueError('Task retains a different model pin; no automatic replacement')
+        return factory
     def __call__(self,capability,job_id):
         job=self.store.worker_job(job_id)
         if not job:raise KeyError(job_id)
@@ -192,7 +201,7 @@ class DurableGateways:
         self._launch_errors={}
         for row in PinRepository(self.store._postgres).list():
             provider=row['provider']
-            if provider=='ollama' or not row['is_default'] or provider not in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):continue
+            if provider=='ollama' or not row['is_default']:continue
             try:
                 if not (self.environ.get(pg.KEY_ENV) or '').strip():raise ValueError('DeepSeek key is not configured; set it only to enable paid work')
                 result=refresh(row['payload'])

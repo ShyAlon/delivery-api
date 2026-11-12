@@ -163,7 +163,15 @@ class ChildInterviewClient(EngineClient):
         from interview_engine.errors import UserFacingError
         try:
             models=session_models.resolve(route,initial_model)
-            session_models.validate(models,route)
+            from .model_registry import native_model
+            native=route=='ollama' and native_model(models['probing'][1])
+            session_models.validate(models,route,preflight=not native)
+            if native:
+                try:installed=self.local_models()
+                except Exception as exc:raise UserFacingError('Ollama cannot be reached by the app.','The installed model check failed.','Start Ollama on the configured host and retry.') from exc
+                selected=models['probing'][1]
+                if selected not in installed and selected+':latest' not in installed:
+                    raise UserFacingError('The selected Ollama model is not installed.','The app endpoint did not list '+selected+'.','Start Ollama or choose an installed model.')
         except UserFacingError as exc:
             from .engine_client import EngineClientError
             from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode

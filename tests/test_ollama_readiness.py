@@ -20,8 +20,10 @@ def test_explicit_ollama_values_cross_without_paid_fallback(tmp_path):
 
 
 def test_no_implicit_model_or_container_loopback(tmp_path):
- with pytest.raises(WorkflowError,match='model ID missing'):
-  settings(source(tmp_path,REQUI_PIN_PROVIDERS='ollama'),'a'*32,names('a'*32),8002)
+ # Model choice belongs to the UI registry, not launch flags.
+ value=settings(source(tmp_path,REQUI_PIN_PROVIDERS='ollama'),'a'*32,names('a'*32),8002)
+ assert not value.get('DELIVERY_OLLAMA_MODEL')
+ assert value['OLLAMA_BASE_URL']=='http://host.docker.internal:11434/v1'
  with pytest.raises(WorkflowError,match='container loopback'):
   settings(source(tmp_path,REQUI_PIN_PROVIDERS='ollama',DELIVERY_OLLAMA_MODEL='phi4',OLLAMA_BASE_URL='http://localhost:11434/v1'),'a'*32,names('a'*32),8002)
 

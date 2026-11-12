@@ -83,8 +83,10 @@ class ProductionGateways:
             child.bound_model=(provider,model)
             return child
         if self.local:
-            return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
+            gateway=WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
                 measure_raw_usage=ollama_settlement_usage,require_prepaid=True)
+            gateway.local_context=dict(self.context)
+            return gateway
         return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
             measure_raw_usage=deepseek_settlement_usage,require_prepaid=True,retail_rates=self.retail_rates,
             verify_provider_snapshot=self.verify_vendor,provider_balance=self.provider_balance,launch_guard=True)
@@ -138,6 +140,7 @@ class ProductionGateways:
         quote,_=catalog.resolve_serialized(stage='preflight',provider='ollama',model=model,
             serialized_request=json.dumps({'model':model,'max_tokens':1}).encode(),max_output_tokens=1)
         validate_local_launch_quote(quote)
+        self.context=dict(context)
         self.local=True
         self.model=model
         self.store=store

@@ -9,6 +9,7 @@ def test_ollama_disabled_without_runtime_before_preflight(monkeypatch,cloud):
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:False)
     monkeypatch.setattr(cloud_runtime,'installed',lambda:False)
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
+    monkeypatch.setattr(cloud_runtime,'install',lambda *a,**kw:None)
     monkeypatch.setattr(module,'engine_client',SimpleNamespace(default_route=lambda:None,
         preview_route=lambda route:(_ for _ in ()).throw(module.EngineUnreachableError('fixture',RuntimeError('not running'))),
         local_models=lambda:(_ for _ in ()).throw(module.EngineUnreachableError('fixture',RuntimeError('not running')))))
@@ -23,7 +24,7 @@ def test_child_preflight_preserves_model_missing_cause(monkeypatch,tmp_path):
     from interview_engine import session_models
     from interview_engine.errors import UserFacingError
     client=ChildInterviewClient(object(),tmp_path,gateway_factory=None,dsn='unused',endpoint='http://fixture')
-    def missing(*args):raise UserFacingError('Ollama model fixture is not installed.','The requested model was not found.','Pull fixture, then retry.')
+    def missing(*args,**kwargs):raise UserFacingError('Ollama model fixture is not installed.','The requested model was not found.','Pull fixture, then retry.')
     monkeypatch.setattr(session_models,'validate',missing)
     with pytest.raises(module.EngineClientError) as error:client.preview_route('ollama')
     assert error.value.http_status==422
