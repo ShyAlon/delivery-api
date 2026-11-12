@@ -11,3 +11,7 @@ Compare complete resolved URLs for router no-op detection and return the mount p
 The exact Requirements browser reproduction is red on unchanged main and green after this fix. It checks automatic new revision, restored note, ready checklist, enabled Approve after the next poll, one item-save request and a working historical current link. A second test saves real signed owner-scoped Postgres semantic evidence and reads it back. Query-only navigation/history, phone/desktop views, failed saves, unresolved flags, late responses and architecture remaining blockers are covered. No model invocation or gate approval is needed for proof.
 
 A saved item is not phase approval. Never enable approval merely because the write returned success. Mount current evidence and recompute all blockers, retaining server revision checks. Browser Reload is not a route to current when the URL deliberately names a historical revision.
+
+After760/765 integration, retain pending accepted/release state and both pending
+and stale-mount refresh guards. Browser reproductions open Other actions then
+Add comment before editing, matching the new shared closed-by-default layout.
