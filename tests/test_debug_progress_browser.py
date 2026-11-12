@@ -94,7 +94,7 @@ def test_everything_zip_reports_per_section_progress_and_honest_counts(page, ui,
     assert manifest['version']==2 and manifest['task_id']==page._debug_task_id
     allowed=[entry for entry in manifest['sections'] if entry['availability']!='policy_excluded']
     assert all(entry['availability'] in ('available','unavailable') for entry in allowed)
-    fixed=['Task-window retained logs','Debug info','Task diagnostics (question, control state, engine state)','Run events','Server logs (last 30 min)','Client logs (this tab)']
+    fixed=['Full task call and cost evidence','Task-window retained logs','Debug info','Task diagnostics (question, control state, engine state)','Run events','Server logs (last 30 min)','Client logs (this tab)']
     assert all('===== '+title+' =====' in body for title in fixed)
     missing=[entry['source'] for entry in allowed if entry['availability']=='unavailable']+['Task-window retained logs','Server logs (last 30 min)']
     total=len(allowed)+len(fixed)

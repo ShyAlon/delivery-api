@@ -3450,6 +3450,13 @@ def _activate_reviewed_pins():
 install_model_pin_routes(app,store,_operator_reader,_activate_reviewed_pins)
 
 
+@app.get('/api/tasks/{task_id}/cost-evidence')
+def task_cost_evidence(task_id:str,source:Literal['answers','answer_usage','provider_attempts','retail_contributions']='answers',after:str=Query('',max_length=512),a:auth.Actor=Depends(auth.require_actor)):
+    try:return store.task_cost_export(task_id,source,after)
+    except KeyError:raise HTTPException(404,'task not found')
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
 @app.get('/api/debug/collection')
 def debug_collection(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depends(auth.require_actor)):
     from .debug_collection import collect

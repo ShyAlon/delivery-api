@@ -67,12 +67,13 @@ def worker_state_summary(worker_state):
     return {"available":True,"worker_jobs":jobs,"provider_attempts":attempts}
 
 
-def model_calls(raw,cloud,limit=300):
+def model_calls(raw,cloud,limit=None):
     """Per-call model timing for the Debug window: every llm_call_end in the
     session's llm-calls.jsonl plus a per-call-type aggregate - which types of
-    calls took how long. Cloud mirrors the provider-diagnostics privacy rule:
-    token counts and derived rates stay server-side; durations stay visible."""
+    calls took how long. Numeric usage and derived rates are owner diagnostics, including in cloud mode.
+    Prompt/response bodies and credentials never enter this projection."""
     import json as _json
+    from .debug_export import safe_numeric_metric
     calls=[]
     if raw is not None:
         for line in raw.decode('utf-8',errors='replace').splitlines():
@@ -82,13 +83,13 @@ def model_calls(raw,cloud,limit=300):
             call={key:entry[key] for key in ('ts','stage','item','provider','model','latency_s','keep_alive') if key in entry}
             timing=entry.get('timing')
             if isinstance(timing,dict):
-                if cloud:timing={k:v for k,v in timing.items() if not k.endswith('_count')}
+                timing={k:v for k,v in timing.items() if k in ('total_ms','load_ms','prompt_eval_ms','prompt_eval_count','eval_ms','eval_count') and type(v) in (int,float) and __import__('math').isfinite(v) and v>=0}
                 if timing:call['timing']=timing
-            if not cloud:
-                if entry.get('usage'):call['usage']=entry['usage']
-                if entry.get('tokens_per_s') is not None:call['tokens_per_s']=entry['tokens_per_s']
+            if isinstance(entry.get('usage'),dict):
+                call['usage']={k:v for k,v in entry['usage'].items() if safe_numeric_metric(k,v)}
+            if safe_numeric_metric('tokens_per_s',entry.get('tokens_per_s')):call['tokens_per_s']=entry['tokens_per_s']
             calls.append(call)
-        calls=calls[-limit:]
+        if limit is not None:calls=calls[-limit:]
     by_stage={}
     for call in calls:
         key=(call.get("provider"),call.get("model"),call.get("stage"))
@@ -97,7 +98,7 @@ def model_calls(raw,cloud,limit=300):
         timing=call.get("timing") or {}
         for k in ("load_ms","prompt_eval_ms","eval_ms"):
             if k in timing:agg[k]=agg.get(k,0)+timing[k]
-        if not cloud and call.get("usage"):
+        if call.get("usage"):
             agg["input_tokens"]=agg.get("input_tokens",0)+call["usage"].get("input_tokens",0)
             agg["output_tokens"]=agg.get("output_tokens",0)+call["usage"].get("output_tokens",0)
     aggregates=[]
