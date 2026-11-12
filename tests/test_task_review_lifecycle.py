@@ -18,7 +18,7 @@ def test_concept_submit_keeps_the_new_approval_review_mounted(dsn,keys,tmp_path_
             pump_interview(page,host.base,tid,answers,finish=False,timeout=30)
             # The current UI may already auto-open the concept decision.
             # Requiring a launcher after navigation races the real route.
-            page.wait_for_url('**/decisions/**')
+            X.open_current_decision(page)
             page.locator('input[name="choice"]').first.check()
             page.locator('textarea[name="rationale"]').fill('Deterministic first concept')
             old=page.url

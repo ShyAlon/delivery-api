@@ -158,7 +158,7 @@ def test_not_started_panel_layout(pg_page,pg_ui,pg_ids):
     control=route.bounding_box();action=start.bounding_box();assert control['y']+control['height']+12<action['y']
     assert control['y']>=label.bounding_box()['y']+12
     assert start.is_visible() and not start.is_enabled()
-    assert 'cannot start:' in panel.locator('#startstatus').inner_text()
+    assert 'No alternate route will be chosen automatically.' in panel.locator('#startstatus').inner_text()
 
 
 def test_start_screen_displays_engine_resolved_model_and_conflict(pg_page,pg_ui,pg_ids):
@@ -183,6 +183,9 @@ def test_start_screen_displays_engine_resolved_model_and_conflict(pg_page,pg_ui,
 def test_not_started_running_and_done_pages(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
+    # This layout case explicitly supplies a ready route; actual empty-runtime
+    # readiness is covered separately and must stay fail-closed.
+    page.route('**/api/model-routes',lambda r:r.fulfill(json={'managed':True,'default_route':{'route':'ollama','model':'phi4'},'routes':[{'id':'ollama','available':True,'managed':True,'model':'phi4'}]}))
     page.goto(ui + f'/tasks/{pg_ids["empty"]}/view')
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
     start=page.get_by_role("button",name="Start interview");assert start.is_visible() and start.is_enabled()
@@ -1206,6 +1209,7 @@ def test_model_route_default_and_phase_override_controls(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["empty"]
     sim=pg_ids["sim"]
+    page.route('**/api/model-routes',lambda r:r.fulfill(json={'managed':True,'default_route':{'route':'ollama','model':'phi4'},'routes':[{'id':'ollama','available':True,'managed':True,'model':'phi4'},{'id':'deepseek','available':False,'managed':True}]}))
     page.goto(ui+f'/tasks/{tid}/view')
     picker=page.get_by_role('group',name='Default model route');picker.wait_for()
     assert picker.locator('[data-start-route]').count()==2

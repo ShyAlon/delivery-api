@@ -254,6 +254,15 @@ def create_task(page, base, title, brief):
 
 
 
+def open_current_decision(page):
+    """Both current routes are valid: an auto-open review or its live launcher."""
+    page.wait_for_function("location.pathname.includes('/decisions/') || document.querySelector('#opendecision')",timeout=30000)
+    # Test and activate in the same browser turn, so auto-navigation cannot
+    # remove the launcher between a Python is-visible check and click.
+    page.evaluate("if(!location.pathname.includes('/decisions/'))document.querySelector('#opendecision')?.click()")
+    page.wait_for_url('**/decisions/**',timeout=30000)
+
+
 def answer_question(page, text):
     """Answer the currently rendered interview question and wait for the next
     state: either the next question form or the interview-complete view."""

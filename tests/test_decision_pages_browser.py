@@ -256,15 +256,11 @@ def test_replace_rejects_bad_number(page):
  p.locator('input[name="action-0"][value="replace"]').check();p.locator('[data-path=\'["priority"]\']').fill('');p.get_by_role('button',name='Apply decisions and continue').click()
  expect(p.locator('#semanticstatus')).to_contain_text('must be a number');assert not posts
 
-def test_phase_keys_have_human_labels():
- import subprocess,shutil,pathlib
- node=shutil.which('node')
- if not node:__import__('pytest').skip('node not available')
- web=pathlib.Path(__file__).resolve().parents[1]/'src/delivery_api/web/format.js'
- src=web.read_text().replace("import {esc} from './client-core.js';","const esc=s=>String(s);").replace("'./table-component.js'",json.dumps(web.with_name('table-component.js').as_uri()))
- out=subprocess.run([node,'--input-type=module','-e',src+";console.log(JSON.stringify(['intent','conops','needs','srs','architecture','specs','tests'].map(humanLabel)))"],capture_output=True,text=True,timeout=30)
- assert out.returncode==0,out.stderr
- assert json.loads(out.stdout)==['Start','Concept of Operations','Stakeholder Needs','Requirements','Architecture','Specifications','Tests']
+def test_phase_keys_have_human_labels(page):
+ p,base,root=page
+ p.goto(base+'/')
+ labels=p.evaluate("async()=>{const {humanLabel}=await import('/assets/format.js');return ['intent','conops','needs','srs','architecture','specs','tests'].map(humanLabel)}")
+ assert labels==['Start','Concept of Operations','Stakeholder Needs','Requirements','Architecture','Specifications','Tests']
 
 def test_title_without_colon_uses_first_words():
  import subprocess,shutil,pathlib

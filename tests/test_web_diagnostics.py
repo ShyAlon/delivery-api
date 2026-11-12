@@ -80,7 +80,7 @@ def test_the_task_page_uses_the_unavailable_wording_and_stops_the_live_counters(
     assert "sessionUnavailable(t.control_snapshot)" in task and "unavail?'Needs attention':stateLabel(t.state)" in task
     assert task.count("unavailable:unavail?unavailText:''") == 6 and "Session unavailable in this environment" in task
     progress = (WEB / "progress.js").read_text()
-    assert "if(unavailable)return `<details class=\"review-progress\"" in progress and progress.index("if(unavailable)")<progress.index("Connected to progress")
+    assert "if(unavailable)return `<details class=\"review-progress\"" in progress and progress.index("if(unavailable)")<progress.index("${esc(progressStatusText(")
     assert "${unavail?'':progressScope(" in task and "${unavail?'Needs attention':stateLabel(t.state)}" in task
     assert "Rerun stage" in task          # the stage rerun button and its existing wording are untouched
 

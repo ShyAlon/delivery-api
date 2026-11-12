@@ -55,7 +55,7 @@ def test_decision_load_tracing(tracing_host):
                    'Instructors confirm from their phone.', 'Weekly payouts are automatic.']
         X.pump_interview(page, host.base, task_id, answers, finish=False, timeout=120)
         # Concept review now opens automatically; read its real current URL.
-        page.wait_for_url('**/decisions/**', timeout=15000)
+        X.open_current_decision(page)
         from urllib.parse import urlsplit
         current = urlsplit(page.url)
         href = current.path + ('?' + current.query if current.query else '')
