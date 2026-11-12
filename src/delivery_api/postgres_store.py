@@ -1102,10 +1102,14 @@ FROM tasks t"""
         if not task or task.get('stop_requested_at') is None:return False
         row=self._execute_native("SELECT control FROM engine_sessions WHERE session_id=%s FOR UPDATE",(session_id,)).fetchone()
         if not row or not (row['control'] or {}).get('stopped'):return False
-        jobs=self._execute_native('SELECT job_id,state FROM worker_jobs WHERE task_id=%s AND session_id=%s',(tid,session_id)).fetchall()
+        jobs=self._execute_native("""SELECT j.state,d.payload
+            FROM worker_jobs j LEFT JOIN decision_reviews d
+              ON d.task_id=j.task_id AND d.wait_id='child-job:'||j.job_id
+              AND d.revision='child-completion-v1'
+            WHERE j.task_id=%s AND j.session_id=%s""",(tid,session_id)).fetchall()
         if not jobs:return False
         for job in jobs:
-            proof=self.decision_review(tid,'child-job:'+job['job_id'],'child-completion-v1')
+            proof=json.loads(job['payload']) if job['payload'] is not None else None
             if job['state']!='done' or not proof or proof.get('reaped') is not True:return False
         if self._execute_native("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s AND p.state!='settled' LIMIT 1",(tid,)).fetchone():return False
         if self._execute_native("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=%s AND r.state!='settled' LIMIT 1",(tid,)).fetchone():return False
