@@ -41,3 +41,24 @@ Run tests with explicit DELIVERY_TEST_ENGINE_SOURCE,
 DELIVERY_TEST_GENERATOR_SOURCE and DELIVERY_TEST_SPEC_SOURCE when checking sibling
 source integrations. Missing inputs are not successful execution. No real vendor
 credentials or external database are used.
+
+## Continuation evidence
+
+- Final fast split: 2,434 passed, four existing skips (before the later tiny
+  failed-answer visibility fix). No hosted CI result is implied.
+- All 167 non-cosmetic main UI nodes exercised in bounded groups. Four stale
+  fixture/assertion issues repaired; their exact reruns pass. Other browser
+  modules exercised in groups; label-only proof now imports in a real browser,
+  not a partially rewritten Node dependency graph.
+- A failed answer hid its question and did not restore it. The existing failing
+  browser test now passes with the original question and draft visible again;
+  late old-render failures still cannot edit a newer view. Screenshot inspection
+  shows a remaining stale "Processing your answer" progress label, which needs
+  investigation before completion. Do not call the whole failure UI repaired.
+- Real installed/default/legacy child and generator runtime group: 35 passed.
+- Startup inventory now includes the two existing answer-accounting tables,
+  with their normal backend access. No new migration or live DB action.
+- Big historical PG successor matrix still needs bounded node execution.
+  Ordinary PG scope/store group: 52 passed excluding that matrix. A two-case
+  provider-hold subset passed. Interrupted outputs are not final results.
+- Main remained 7c3f9013 on the last credentialed fetch. No PR opened yet.

@@ -2106,6 +2106,7 @@ def test_shadow_copy_not_shown_when_send_fails(pg_page, pg_ui, pg_ids):
     page.get_by_text('Answer could not be sent.', exact=False).wait_for()
     assert page.locator('#shadowcopy').is_hidden() and page.locator('#answerform').is_visible()
     assert answer.input_value() == 'Keep me' and page.locator('#currentquestion').is_visible()
+    page.screenshot(path='/downloads/debt-answer-failure-restored.png',full_page=True)
 
 
 def _long_interview_page(page, ui, answered=True, task_id="live"):
