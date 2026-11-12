@@ -20,6 +20,10 @@ def test_final_package_button_downloads_verified_zip(pg_browser,export_env,tmp_p
         manifest=json.loads(archive.read('package.json'))
         assert manifest['task_id']==tid and manifest['source']['owner_id']==workspace.scope.owner_id
         assert 'spec/AGENTS.md' in archive.namelist()
+        assert 'CODING_AGENT_PROMPT.md' in archive.namelist()
+        assert 'Implement the product' in archive.read('CODING_AGENT_PROMPT.md').decode()
         for name,digest in manifest['sha256'].items():assert hashlib.sha256(archive.read(name)).hexdigest()==digest
+    page.get_by_text('Package contents',exact=True).click()
+    assert page.get_by_text('CODING_AGENT_PROMPT.md',exact=True).is_visible()
     evidence=Path(os.environ.get('REQUI_TEST_ARTIFACTS',tmp_path));evidence.mkdir(parents=True,exist_ok=True)
     page.screenshot(path=str(evidence/'final-package-ui.png'),full_page=False)
