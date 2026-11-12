@@ -114,7 +114,7 @@ def test_approval_register_flags_missing_data_and_records_explicit_answer(page):
  state['current']['decision']['context']['evidence']['intent_model']['founder_register']=register
  p.goto(base+'/tasks/concept/decisions/wait-review');expect(p.get_by_text('Missing Data and Open Founder Inputs')).to_be_visible();expect(p.locator('body')).not_to_contain_text('FD-style');expect(p.locator('select')).to_have_count(0)
  p.locator('.founder-register details').first.evaluate('d=>d.open=true');p.locator('[data-founder-group] label.pill',has_text='Answer It').click();p.locator('[data-founder-answer]').fill('Blue and white');p.locator('[data-founder-reason]').fill('Calm')
- p.set_viewport_size({'width':1249,'height':920});assert p.evaluate("(()=>{const r=document.querySelector('.founder-register').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth})()");assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().height<150");p.mouse.wheel(0,400);p.wait_for_timeout(200);assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().top>=0");p.screenshot(path=str(root/'founder-register-desktop.png'),full_page=True)
+ p.set_viewport_size({'width':1249,'height':920});assert p.evaluate("(()=>{const r=document.querySelector('.founder-register').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth})()");assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().height<150");p.mouse.wheel(0,400);p.wait_for_timeout(200);assert p.evaluate("getComputedStyle(document.querySelector('.page-head')).position==='relative'")  # Shared document scroll replaces sticky heading.;p.screenshot(path=str(root/'founder-register-desktop.png'),full_page=True)
  p.get_by_role('button',name='Continue',exact=True).click();expect(p.locator('#review-status')).to_contain_text('Decision saved')
  assert state['posts'][0]['founder_inputs'][0]['decision']=='Blue and white'
 
@@ -229,7 +229,7 @@ def test_semantic_header_and_footer_stay_visible_and_structural_cannot_be_kept(p
  p.mouse.wheel(0,2500);p.wait_for_timeout(300)
  vh=p.viewport_size['height']
  head=p.locator('.semantic-head').bounding_box();foot=p.locator('.semantic-footer').bounding_box()
- assert 0<=head['y']<200 and head['y']+head['height']>0
+ assert p.locator('.semantic-head').evaluate('e=>getComputedStyle(e).position')=='relative'  # Static heading, persistent bottom action only.
  assert foot['y']+foot['height']<=vh+1 and foot['y']>=0
  expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
 
@@ -339,7 +339,7 @@ def test_concept_context_is_collapsed_without_debug_fields_and_does_not_overlap(
   p.evaluate(f'window.scrollTo(0,{y})');p.wait_for_timeout(150)
   ev=p.locator('.gate-evidence').bounding_box();ct=p.locator('.gate-controls').bounding_box();head=p.locator('.page-head').bounding_box()
   assert head['y']+head['height']<=ev['y']+ev['height'] and (y>0 or head['y']>=0)
-  if y>0:assert ct['y']>=83,(y,ct)
+  if y>0:assert p.locator('.gate-controls').evaluate('e=>getComputedStyle(e).position')=='static'  # Shared single document flow.
   assert ev['x']+ev['width']<=ct['x']+1,(y,ev,ct)
  p.evaluate('window.scrollTo(0,300)');p.wait_for_timeout(150);p.screenshot(path=str(root/'concept-accepted-scrolled.png'))
 
@@ -420,7 +420,7 @@ def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p.screenshot(path='/tmp/reference-review-desktop.png',full_page=True)
  p.set_viewport_size({'width':390,'height':844})
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
- assert p.locator('.semantic-footer').evaluate('e=>getComputedStyle(e).position') == 'static'
+ assert p.locator('.semantic-footer').evaluate('e=>getComputedStyle(e).position') == 'fixed'  # Shared current-action strip stays visible on phone.
  p.locator('.semantic-item').scroll_into_view_if_needed()
  p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
  p.screenshot(path='/tmp/reference-review-mobile.png',full_page=True)
