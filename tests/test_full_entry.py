@@ -52,7 +52,7 @@ def test_supervisor_releases_report_pool_even_when_preflight_refuses(monkeypatch
     from delivery_api import db_pool
     calls=[]
     monkeypatch.setattr(db_pool,'PROCESS_POOL_MAX',9)
-    report=SimpleNamespace(generated_at='fixture',refused=True,render_text=lambda:'fixture report')
+    report=SimpleNamespace(generated_at='fixture',refused=True,to_dict=lambda:{'status':'fail','checks':[]},render_text=lambda:'fixture report')
     monkeypatch.setattr(full_entry,'check_env',lambda env:[])
     monkeypatch.setattr(full_entry.preflight,'run',lambda env:report)
     monkeypatch.setattr(full_entry.preflight,'write_report',lambda *a:calls.append('save') or True)

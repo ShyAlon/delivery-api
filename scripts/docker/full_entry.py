@@ -5,6 +5,8 @@ Delivery exiting fails the container, so the restart policy sees it.
 import json,os,signal,socket,subprocess,sys,threading,time,urllib.request
 
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))   # preflight.py sits next to this file (/app in the image)
+from delivery_api.startup_log import stage,persist_report,sanitize
+if '--healthcheck' not in sys.argv:stage('entrypoint')
 import preflight
 from datetime import datetime,timezone
 from pathlib import Path
@@ -93,23 +95,29 @@ def main():
         except Exception as error:
             print('unhealthy:',error,file=sys.stderr);return 1
         return 0
+    stage('environment-check')
     problems=check_env(os.environ)
     if problems:
-        for p in problems:print('full service not started:',p,file=sys.stderr)
+        for p in problems:print('full service not started:',p,file=sys.stderr,flush=True)
+        stage('environment-refused')
         return 2
+    stage('preflight')
     report=preflight.run(os.environ)
-    print(report.render_text(),flush=True)
+    print(sanitize(report.render_text()),flush=True)
+    persist_report(report.to_dict())
     saved=preflight.write_report(report,preflight.report_path(os.environ))
     os.environ['REQUI_PREFLIGHT_GENERATED_AT']=report.generated_at
     os.environ['REQUI_PREFLIGHT_REPORT_SAVED']='1' if saved else '0'
     if report.refused:
-        print('full service not started: the startup preflight found blocking problems (above)',file=sys.stderr)
+        stage('preflight-refused')
+        print('full service not started: the startup preflight found blocking problems (above)',file=sys.stderr,flush=True)
         return 2
     procs=[]
     def stop(*_):
         for p in procs:
             if p.poll() is None:p.terminate()
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
+    stage('delivery-spawn')
     delivery=subprocess.Popen(command());procs.append(delivery)
     while True:
         for p in procs:

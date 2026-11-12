@@ -100,7 +100,8 @@ def test_an_unreachable_database_refuses_and_names_it():
     by_name = {c.name: c for c in report.checks}
     assert by_name['database-role-claims'].status == 'fail' and report.refused
     assert 'connection refused' in by_name['database-role-claims'].found
-    assert by_name['required-tables'].status == 'fail'  # no connection: tables cannot be verified
+    # Connectivity is the hard refusal. Dependents do not become fake schema failures.
+    assert by_name['required-tables'].status == 'skip'
 
 
 def test_missing_tables_refuse_and_name_the_tables():

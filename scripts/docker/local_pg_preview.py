@@ -180,7 +180,9 @@ def start_app(resource,nonce,image,envfile,port,host_memory=None):
         if live and live.get('Image')==image and live.get('State',{}).get('Health',{}).get('Status')=='healthy':return
         if live and live.get('State',{}).get('Running') is not True:break
         time.sleep(1)
-    raise WorkflowError('local app readiness unconfirmed; owned containers retained, no automatic retry')
+    from startup_failure import capture
+    capture(resource['app'],Path(envfile).parent/'startup-diagnostics',values,command=command)
+    raise WorkflowError('local app readiness unconfirmed; automatic evidence printed above; owned containers retained, no automatic retry')
 
 
 def stop_app(resource,nonce):
