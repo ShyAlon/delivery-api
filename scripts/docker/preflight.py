@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +125,7 @@ class Check:
 class Report:
     checks: list = field(default_factory=list)
     generated_at: str = ''
+    root_cause: str = ''
 
     @property
     def refused(self):
@@ -138,7 +140,7 @@ class Report:
     def render_text(self):
         headline = {'pass': 'startup preflight: PASS', 'warn': 'startup preflight: PASS WITH WARNINGS',
                     'fail': 'startup preflight: REFUSING TO START'}[self.status]
-        lines = [headline]
+        lines = ([self.root_cause] if self.root_cause else [])+[headline]
         for c in self.checks:
             line = '[%s] %s: checked %s; expected %s; found %s; where %s' % (
                 c.status, c.name, c.checked, c.expected, c.found, c.where)
@@ -147,7 +149,7 @@ class Report:
         return '\n'.join(lines)
 
     def to_dict(self):
-        return {'generated_at': self.generated_at, 'status': self.status,
+        return {'generated_at': self.generated_at, 'status': self.status, 'root_cause':self.root_cause,
                 'checks': [{'name': c.name, 'level': c.level, 'status': c.status, 'checked': c.checked,
                             'expected': c.expected, 'found': c.found, 'where': c.where, 'remedy': c.remedy}
                            for c in self.checks]}
@@ -468,9 +470,26 @@ def _check_staleness(env):
                  expected, build, 'REQUI_EXPECTED_REPOS vs REQUI_BUILD_REPOS')
 
 
-def _real_connect(dsn):
+def _real_connect(dsn,timeout=10):
     import psycopg
-    return psycopg.connect(dsn, connect_timeout=10)
+    import signal
+    import threading
+    # This is the full-image startup CLI, not an app request. A wall-clock
+    # alarm covers DNS plus every libpq resolved-address attempt. Driver
+    # connect_timeout alone resets per address and caused the 3-minute refusal.
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal,'setitimer'):
+        raise RuntimeError('startup database deadline requires the startup main thread')
+    def expired(*_):raise TimeoutError('startup database connection timeout (10 seconds total)')
+    previous=signal.getsignal(signal.SIGALRM);timer=signal.getitimer(signal.ITIMER_REAL)
+    began=time.monotonic()
+    signal.signal(signal.SIGALRM,expired);signal.setitimer(signal.ITIMER_REAL,min(timeout,timer[0]) if timer[0]>0 else timeout)
+    try:
+        from psycopg.conninfo import conninfo_to_dict
+        options=conninfo_to_dict(dsn).get('options',os.environ.get('PGOPTIONS',''))
+        return psycopg.connect(dsn,connect_timeout=max(1,int(timeout)),options=options+' -c statement_timeout=5000 -c lock_timeout=1000')
+    finally:
+        signal.setitimer(signal.ITIMER_REAL,0);signal.signal(signal.SIGALRM,previous)
+        if timer[0]>0:signal.setitimer(signal.ITIMER_REAL,max(.001,timer[0]-(time.monotonic()-began)),timer[1])
 
 
 def run(env, *, connect=None, import_module=importlib.import_module, required_tables=REQUIRED_TABLES):
@@ -479,7 +498,21 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
     # AssertionError because the package re-exports nothing, while mocked tests stayed green).
     """Run every check and return the report. Nothing here raises: an unexpected error
     inside a warn-level check becomes a warning, inside a refuse-level check a refusal."""
-    connect = connect or _real_connect
+    # All preflight connections share one wall-clock budget. No expensive
+    # reconnect after the first connect error; downstream checks name the
+    # already-known prerequisite instead of inventing new schema failures.
+    raw_connect=connect;deadline=None;connect_error=None
+    def connect(dsn):
+        nonlocal deadline,connect_error
+        if connect_error is not None:raise connect_error
+        if deadline is None:deadline=time.monotonic()+10
+        remaining=deadline-time.monotonic()
+        try:
+            if remaining<=0:raise TimeoutError('startup database connection timeout (shared deadline)')
+            return raw_connect(dsn) if raw_connect else _real_connect(dsn,timeout=remaining)
+        except Exception as error:
+            connect_error=error
+            raise
     report = Report(generated_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'))
     connection_holder = []
     builders = [('artifacts-root-writable', 'refuse', lambda: _check_artifacts(env)),
@@ -494,16 +527,44 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
                 ('engine-compatible', 'refuse', lambda: _check_engine(env, import_module)),
                 ('unsettled-compute-segments', 'warn', lambda: _check_segments(env)),
                 ('build-staleness', 'warn', lambda: _check_staleness(env))]
+    dependency_failed=False
+    skipped=[]
     for name, level, build in builders:
-        try:
-            report.checks.append(build())
-        except Exception as error:
-            report.checks.append(Check(name, level, 'fail' if level == 'refuse' else 'warn',
-                                       'the %s preflight check' % name, 'a clean evaluation',
-                                       # Exception text can contain DSNs, credentials or user data.
-                                       'the check itself failed: %s (details suppressed)' % type(error).__name__,
-                                       'scripts/docker/preflight.py (%s)' % name,
-                                       'a preflight check must never crash - report this'))
+        began=time.monotonic()
+        from delivery_api.startup_log import stage
+        stage('preflight-check',check=name,status='started')
+        if (dependency_failed or connect_error is not None) and name in ('resource-metrics-store','engine-quality-store','required-tables','feature-tables'):
+            report.checks.append(Check(name,level,'skip','database-dependent startup check',
+                'a successful database role/claims prerequisite','skipped after the first database connection/prerequisite failed',
+                'the first failed database check','fix the first database failure, then start again'))
+            skipped.append(name)
+        else:
+            try:
+                report.checks.append(build())
+            except Exception as error:
+                report.checks.append(Check(name, level, 'fail' if level == 'refuse' else 'warn',
+                                           'the %s preflight check' % name, 'a clean evaluation',
+                                           'the check itself failed: %s (details suppressed)' % type(error).__name__,
+                                           'scripts/docker/preflight.py (%s)' % name,
+                                           'a preflight check must never crash - report this'))
+        check=report.checks[-1]
+        if (name=='database-role-claims' and check.status=='fail') or (connect_error is not None and not report.root_cause):
+            dependency_failed=True
+            found=check.found.lower()
+            if connect_error is not None:found='cannot connect: '+type(connect_error).__name__.lower()+' '+str(connect_error).lower()
+            if 'cannot connect' in found:
+                if 'timeout' in found or 'timed out' in found:
+                    cause='database unreachable (timeout); the network, firewall/VPN or database endpoint may be unreachable'
+                elif 'authentication' in found or 'password' in found:
+                    cause='database login failed; check the approved login settings'
+                else:cause='database connection failed; inspect the first database check below'
+            elif 'missing or unsupported' in found:cause='database settings missing or unsupported'
+            else:cause='database role/claims prerequisite failed; inspect that check below'
+            report.root_cause='root cause: '+cause
+        stage('preflight-check',check=name,status=check.status)
+    if report.root_cause:
+        stage('database-prerequisite-refused',error_kind='timeout' if 'timeout' in report.root_cause else 'database')
+        report.root_cause+='; '+str(len(skipped))+' dependent checks skipped'+(' ('+', '.join(skipped)+')' if skipped else '')
     for connection in connection_holder:
         try: connection.close()
         except Exception: pass

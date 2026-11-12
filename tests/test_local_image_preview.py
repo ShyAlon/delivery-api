@@ -8,6 +8,11 @@ spec=importlib.util.spec_from_file_location('local_image_preview',D/'local_image
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 ID='sha256:'+'a'*64
 
+@pytest.fixture(autouse=True)
+def host_tcp_is_hermetic(monkeypatch):
+    import startup_network
+    monkeypatch.setattr(startup_network,'probe',lambda dsn:{'status':'reachable','scope':'fixture host TCP'})
+
 
 def state():
     class State:pass

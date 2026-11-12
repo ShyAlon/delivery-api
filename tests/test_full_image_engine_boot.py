@@ -14,6 +14,9 @@ ENTRY=Path(__file__).resolve().parents[1]/'scripts'/'docker'/'full_entry.py'
 
 def _base_env(tmp_path):
     return {'PATH':os.environ.get('PATH',''),'HOME':str(tmp_path),'XDG_DATA_HOME':str(tmp_path),
+        # The entry and its shared startup module must come from this checkout,
+        # not whichever editable delivery-api another worktree installed.
+        'PYTHONPATH':str(ENTRY.parents[2]/'src'),
         'VMODEL_ARTIFACTS_DIR':str(tmp_path/'artifacts'),'PYTHONNOUSERSITE':'1',
         'DELIVERY_DATABASE_URL':'sqlite:///'+str(tmp_path/'smoke.db'),'DELIVERY_HOST':'127.0.0.1',
         'DELIVERY_CONTROL_PLANE_ONLY':'0','INTERVIEW_ENGINE_TOKEN':'boot-test-'+('x'*24),

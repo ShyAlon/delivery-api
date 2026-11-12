@@ -56,6 +56,13 @@ def _preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridg
     if not apply:return {'state':'reviewed','image_id':image_id,'applied':False}
     if not confirm('start this accepted preview; an existing '+name+' is stopped and kept renamed for rollback (no task is started)'):
         raise WorkflowError('preview declined; nothing started')
+    from startup_network import probe
+    reachability=probe(values.get('DELIVERY_DATABASE_URL',''))
+    log('INFO','database reachability precheck: '+str(reachability))
+    if reachability['status']=='unreachable':
+        # The old preview has not been stopped. This is explicitly a host
+        # diagnostic, never a claim that credentials/schema/Docker are wrong.
+        raise WorkflowError('database unreachable from this host ('+reachability.get('reason','connection failed')+'); check network/firewall/VPN or database endpoint; preview not replaced, no task Start sent; Docker connectivity remains unverified')
     host_memory=host_memory_factory() if host_memory_factory is not None else None
     # docker --env-file passes values literally (no quote stripping), so hand the
     # container the exact parsed values validate approved, not the owner file.
@@ -111,6 +118,8 @@ def _preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridg
             finally:backoffice.close()
         if status.get('Running') is not True or status.get('Health',{}).get('Status')=='unhealthy':break
         time.sleep(1)
+    from startup_failure import capture
+    capture(name,state.path.parent/'startup-diagnostics',values,command=command)
     code=last.get('ExitCode')
-    detail='exit code '+str(code) if code is not None else 'exit code unknown'
-    raise WorkflowError('preview readiness failed ('+detail+'); the typed startup problem is in the container log: docker logs --tail 80 '+name+'; owned container retained for inspection, no task Start sent')
+    detail=('still running; health did not pass' if last.get('Running') is True else 'exit code '+str(code) if code is not None else 'exit code unknown')
+    raise WorkflowError('preview readiness failed ('+detail+'); docker logs, state and last startup stage captured automatically above; owned container retained for inspection, no task Start sent')

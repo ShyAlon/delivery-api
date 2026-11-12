@@ -2,6 +2,8 @@
 
 
 def main():
+    from .startup_log import stage
+    stage('app-entry')
     import os
     import uvicorn
     from .networking import delivery_listener

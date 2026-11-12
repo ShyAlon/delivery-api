@@ -20,7 +20,8 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
     DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 \
     INTERVIEW_ENGINE_PYTHON=/usr/local/bin/python INTERVIEW_ENGINE_TENANTS=1 \
-    VMODEL_ARTIFACTS_DIR=/data/artifacts XDG_DATA_HOME=/data HOME=/data
+    VMODEL_ARTIFACTS_DIR=/data/artifacts XDG_DATA_HOME=/data HOME=/data \
+    REQUI_STARTUP_EVIDENCE=/data/requi-startup.json
 WORKDIR /app
 COPY --from=build /wheels/requirements.txt /wheels/requirements.txt
 # Packages are installed without dependency resolution, as scripts/build-dist.sh does: verification-loop pins an old

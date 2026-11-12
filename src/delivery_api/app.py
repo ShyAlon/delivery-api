@@ -1,5 +1,7 @@
 """Thin job-control API plus the V-model web console, served on one port."""
 from __future__ import annotations
+from .startup_log import stage as startup_stage
+startup_stage('app-import')
 from .diagnostic_evidence import spawn
 
 import asyncio
@@ -83,7 +85,9 @@ def _runtime_version() -> dict:
 RUNTIME_VERSION=_runtime_version()
 
 WEB_DIR = Path(__file__).parent / "web"
+startup_stage('store-create')
 store = create_store(config.DATABASE_URL)
+startup_stage('store-created')
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
 orchestrator = PhaseOrchestrator(store,runner)
@@ -528,6 +532,7 @@ async def _resume_one_interview(task_id:str,session:str)->None:
 async def lifespan(application:FastAPI):
     global _streams_closed_on_signal
     _streams_closed_on_signal=0
+    startup_stage('lifespan-operator-reads')
     from .operator_startup import install as install_operator_reads
     install_operator_reads(application,os.environ,dsn=config.DATABASE_URL,enabled=True)
     print('Operator reads: '+application.state.operator_read_status,file=sys.stderr)
@@ -537,6 +542,7 @@ async def lifespan(application:FastAPI):
     selected_metrics(config.DATABASE_URL,os.environ)
     from . import cloud_execution
     from . import cloud_runtime
+    startup_stage('lifespan-execution-runtime')
     try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
     except Exception as exc:print('Execution runtime unavailable: '+type(exc).__name__,file=sys.stderr)
     cloud_execution.log_status()
@@ -552,6 +558,7 @@ async def lifespan(application:FastAPI):
             if signal.getsignal(signum) is not _shutdown_signal:
                 _previous_shutdown_handlers[signum]=signal.getsignal(signum)
                 signal.signal(signum,_shutdown_signal)
+    startup_stage('lifespan-ready')
     try:yield
     finally:
         loop_lag_task.cancel()
