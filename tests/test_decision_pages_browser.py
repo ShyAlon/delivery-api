@@ -715,3 +715,69 @@ def test_sticky_header_never_covers_the_field_being_edited(page):
  p,base,root=page;_applying_semantic_page(p,base)
  head=p.locator('.semantic-head').bounding_box()
  assert head['height']<=90 or p.locator('.semantic-head').evaluate("e=>getComputedStyle(e).position")!='sticky',head
+
+@pytest.mark.parametrize('mobile',[False,True])
+def test_pending_findings_looks_locked_and_feedback_is_in_view(page,mobile):
+ p,base,root=page
+ p.set_viewport_size({'width':390 if mobile else 1366,'height':844})
+ held=_slow_flag_page(p,base)
+ p.locator('input[name="action-0"][value="accept"]').check()
+ p.get_by_role('button',name='Apply decisions and continue').click()
+ expect(p.locator('#semanticform')).to_have_attribute('aria-busy','true')
+ expect(p.locator('.pill').first).to_have_css('cursor','not-allowed')
+ expect(p.locator('#semanticstatus')).to_be_in_viewport()
+ assert p.locator('#semanticform input:enabled,#semanticform textarea:enabled,#semanticform button:enabled').count()==0
+ assert p.locator('#semanticstatus .waiting-spinner').count()==1
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path=str(SCREENSHOTS/('pending-mobile.png' if mobile else 'pending-desktop.png')))
+ assert len(held)==1
+ held[0].fulfill(status=500,json={'detail':'Engine unavailable'})
+ expect(p.locator('#semanticstatus')).to_contain_text('Engine unavailable')
+ expect(p.locator('input[value="accept"]')).to_be_enabled()
+ expect(p.locator('#semanticform')).not_to_have_attribute('aria-busy','true')
+
+
+def test_pending_findings_restores_intrinsic_disabled_choices_after_error(page):
+ p,base,root=page
+ _flag_page(p,base,[_f(0,'c0',['constraints',0],'Must be an extension','structural')])
+ held=[];p.route('**/api/tasks/concept/answer',lambda r:held.append(r))
+ p.locator('input[value="remove"]').check();p.get_by_role('button',name='Apply decisions and continue').click()
+ expect(p.locator('#semanticform')).to_have_attribute('aria-busy','true')
+ held[0].fulfill(status=500,json={'detail':'Engine unavailable'})
+ expect(p.locator('#semanticstatus')).to_contain_text('Engine unavailable')
+ expect(p.locator('input[value="accept"]')).to_be_disabled()
+ expect(p.locator('input[value="remove"]')).to_be_enabled()
+
+
+@pytest.mark.parametrize('purpose',['conops_concept','interview_approval'])
+def test_shared_pending_locks_concept_and_approval_forms(page,purpose):
+ p,base,root=page;state=fake(p);state['current']=review('wait-concept',purpose)
+ held=[];p.route('**/api/tasks/concept/answer',lambda r:held.append(r))
+ p.goto(base+'/tasks/concept/decisions/wait-concept')
+ if purpose=='conops_concept':
+  p.locator('input[value="2"]').check();p.locator('[name=rationale]').fill('One deployment')
+ p.locator('#reviewform button[type=submit]').click()
+ expect(p.locator('#reviewform')).to_have_attribute('aria-busy','true')
+ expect(p.locator('#review-status .pending-message')).to_contain_text('Saving decision')
+ assert p.locator('#reviewform input:enabled,#reviewform textarea:enabled,#reviewform button:enabled').count()==0
+ p.locator('#reviewform').dispatch_event('submit');p.wait_for_timeout(50);assert len(held)==1
+ held[0].fulfill(status=500,json={'detail':'Review storage unavailable'})
+ expect(p.locator('#review-status')).to_contain_text('Review storage unavailable')
+ expect(p.locator('#reviewform button[type=submit]')).to_be_enabled()
+
+
+def test_shared_form_pending_preserves_disabled_controls_and_blocks_reentry(page):
+ p,base,root=page;fake(p);p.goto(base+'/tasks/concept/decisions/wait-concept')
+ result=p.evaluate('''async()=>{
+ const {beginFormPending}=await import('/assets/ui-action.js');
+ const root=document.createElement('form');root.innerHTML='<input disabled><input><button>Save</button><div role="status"></div>';document.body.append(root);
+ const button=root.querySelector('button'),status=root.querySelector('[role=status]');
+ const lock=beginFormPending(root,{button,status,label:'Saving fixture…'});
+ const blocked=beginFormPending(root,{status})===null;
+ const frozen=[...root.querySelectorAll('input,button')].every(x=>x.disabled);
+ lock.release();const restored=[...root.querySelectorAll('input')].map(x=>x.disabled);
+ const second=beginFormPending(root,{button,status});second.accepted();second.release();
+ const accepted=[...root.querySelectorAll('input,button')].every(x=>x.disabled);
+ return {blocked,frozen,restored,accepted};
+ }''')
+ assert result=={'blocked':True,'frozen':True,'restored':[True,False],'accepted':True}

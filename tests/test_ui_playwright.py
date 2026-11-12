@@ -3251,3 +3251,26 @@ def test_main_column_fills_the_page_whatever_the_content_width(pg_page,pg_ui,pg_
     page.set_viewport_size({'width':1900,'height':900})
     page.goto(pg_ui+f'/tasks/{pg_ids["empty"]}/view');page.wait_for_timeout(1000)
     assert page.evaluate("Math.round(document.querySelector('main').getBoundingClientRect().width)")==1500
+
+
+def test_gate_pending_locks_all_controls_and_preserves_values(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui;tid=pg_ids['sim']
+    def evidence(task):
+        waiting_gate_snapshot(task)
+        task['artifacts']=[{'phase_key':'intent','name':'intent_model.json','title':'Needs and Scope','stale':False,'present':True,'valid':True,'generation':1}]
+    route_task_snapshot(page,ui,tid,evidence)
+    page.route(f'**/api/tasks/{tid}/artifacts/intent/intent_model.json/view',lambda r:r.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
+    mock_gate_review(page,ui,tid);held=[]
+    page.route(f'**/api/tasks/{tid}/gates/*/decide',lambda r:held.append(r))
+    page.goto(ui+f'/tasks/{tid}/gates/gate-intent')
+    page.locator('[name=comment]').fill('Preserved review note')
+    page.locator('[data-action=approve]').click()
+    expect(page.locator('#gateform')).to_have_attribute('aria-busy','true')
+    assert page.locator('#gateform input:enabled,#gateform textarea:enabled,#gateform select:enabled,#gateform button:enabled').count()==0
+    expect(page.locator('#gate-decision-status')).to_be_in_viewport()
+    page.locator('[data-action=redo]').dispatch_event('click');page.wait_for_timeout(50)
+    assert len(held)==1 and held[0].request.post_data_json['comment']=='Preserved review note'
+    held[0].fulfill(status=500,json={'detail':'Gate storage unavailable'})
+    expect(page.locator('#gate-decision-status')).to_contain_text('Gate storage unavailable')
+    expect(page.locator('[name=comment]')).to_be_enabled()
+    expect(page.locator('[name=comment]')).to_have_value('Preserved review note')

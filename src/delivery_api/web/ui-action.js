@@ -57,3 +57,39 @@ export async function runAction(action,buttons,fn,{busyLabel=null,reason='Workin
     if(!(ok&&keepDisabledOnSuccess))saved.forEach(({b,text,title,wasDisabled})=>{b.disabled=wasDisabled;b.classList.remove('is-busy');b.removeAttribute('aria-busy');if(busyLabel)b.textContent=text;b.title=title});
   }
 }
+
+// A decision is pending from precondition reads through handoff, not only while
+// POST is in flight. One form lock owns controls, visible feedback and recovery.
+const pendingForms=new WeakMap();
+export function beginFormPending(form,{status,button,label='Saving decision…',progress=false,scope=form}={}){
+ if(pendingForms.has(form)){guardBlocked('decision.form','in-flight');return null}
+ const controls=[...scope.querySelectorAll('button,input,select,textarea')];
+ const saved=controls.map(control=>[control,control.disabled]);
+ const buttonHtml=button?.innerHTML;
+ controls.forEach(control=>control.disabled=true);
+ form.setAttribute('aria-busy','true');
+ form.classList.add('is-pending');
+ if(button)button.setAttribute('aria-busy','true');
+ if(status){
+  status.classList.remove('error');status.replaceChildren();
+  const line=document.createElement('div');line.className='pending-message';
+  const spinner=document.createElement('span');spinner.className='waiting-spinner';spinner.setAttribute('aria-hidden','true');
+  line.append(spinner,document.createTextNode(label));status.append(line);
+  if(progress){const host=document.createElement('div');host.id='review-progress-host';status.append(host)}
+  status.setAttribute('aria-live','polite');status.setAttribute('tabindex','-1');
+  status.scrollIntoView({block:'nearest'});status.focus({preventScroll:true});
+ }
+ disabledSet('decision.form','form');
+ let complete=false;
+ const lock={
+  accepted(){complete=true;form.setAttribute('aria-busy','false');form.classList.remove('is-pending');form.classList.add('applied');controls.forEach(control=>{control.removeAttribute('aria-busy');control.classList.remove('is-busy')})},
+  release(){
+   if(complete)return;pendingForms.delete(form);
+   saved.forEach(([control,disabled])=>control.disabled=disabled);
+   form.removeAttribute('aria-busy');form.classList.remove('is-pending');
+   if(button){button.innerHTML=buttonHtml;button.removeAttribute('aria-busy')}
+   disabledClear('decision.form','form');
+  }
+ };
+ pendingForms.set(form,lock);return lock;
+}
