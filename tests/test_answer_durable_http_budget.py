@@ -3,6 +3,7 @@
 Disposable PG, fixture credit, localhost HTTP: no paid execution or live accounts.
 Run with ANSWER_OPT_BASELINE=1 only while comparing the untouched implementation.
 """
+from paid_child_fixture import installed_child_command
 import json,os,sys,threading,uuid
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,HTTPServer
@@ -57,7 +58,7 @@ def test_real_durable_gateway_http_answer_budget(store,repo,tmp_path,monkeypatch
             tid=store.create_task('durable HTTP '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4())
             assert store.begin_interview_start(tid,sid,'deepseek')
             client=ChildInterviewHost(store,tmp_path,gateway_factory=gateways,session_dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=endpoint,paid_runtime=runtime,answer_accounting=from_environment({},runtime)).client()
-            client.supervisor.command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[1]/'src'),str(Path(__import__('interview_engine').__file__).parents[1])]
+            client.supervisor.command=installed_child_command()
             from vmodel_contracts.interactive import StartSessionRequest
             state=client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='A booking app',model_route='deepseek',initial_model=MODEL)).snapshot
             from delivery_api import app as module,request_costs,cloud_runtime

@@ -181,7 +181,14 @@ class ChildInterviewClient(EngineClient):
         except question_config.ConfigError as exc:raise QualityConfigRejected(str(exc)) from exc
         return {'config_version':question_config.CONFIG_VERSION,'config':saved}
     def snapshot(self,sid):
-        with self._registry() as registry:return registry.get(sid,serve=False).snapshot()
+        from .engine_client import EngineClientError
+        from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+        with self._registry() as registry:
+            try:session=registry.get(sid,serve=False)
+            except KeyError as exc:
+                raise EngineClientError(404,ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,
+                    detail='The interview session is unavailable. Saved task artifacts are unchanged.')) from exc
+            return session.snapshot()
     def answer_progress(self,sid,after=0):
         """Best-effort memory stream, never a durable engine journal cursor."""
         from .tenancy import current_scope

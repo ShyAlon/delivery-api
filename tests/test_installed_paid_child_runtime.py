@@ -25,7 +25,7 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
     import asyncio,json,sys,threading
     from pathlib import Path
     from http.server import BaseHTTPRequestHandler,HTTPServer
-    from paid_child_fixture import paid_child
+    from paid_child_fixture import paid_child, InstalledGatewayFactory, installed_child_command
     from delivery_api.child_supervisor import ChildSupervisor
     calls=[]
     class Handler(BaseHTTPRequestHandler):
@@ -43,18 +43,13 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
         def log_message(self,*args):pass
     server=HTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
     endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions'
-    command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
+    command=installed_child_command()
     original=ChildSupervisor.__init__
     def supervisor(self,*args,**kwargs):kwargs['command']=command;original(self,**kwargs)
     monkeypatch.setattr(ChildSupervisor,'__init__',supervisor)
     try:
         with paid_child(store,endpoint) as (factory,runtime),tenant_context(A):
-            class Factory:
-                models=runtime.models;verify_vendor=None
-                def __call__(self,*a):return factory(*a)
-                def refresh_launch(self):pass
-                def close(self):pass
-            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:Factory())
+            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:InstalledGatewayFactory(factory,runtime))
             chosen=[]
             config=env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN.replace('user=sandbox','user=delivery_app'),VMODEL_ARTIFACTS_DIR=str(tmp_path))
             if answer_mode!='default':config['DELIVERY_ANSWER_ACCOUNTING_MODE']=answer_mode

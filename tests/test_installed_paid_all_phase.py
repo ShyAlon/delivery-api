@@ -7,7 +7,7 @@ from delivery_api import cloud_runtime,inprocess_engine,config
 from delivery_api.tenancy import tenant_context,session_root
 from test_postgres_store import A,DSN
 from test_production_gateway import env
-from paid_child_fixture import paid_child
+from paid_child_fixture import paid_child, InstalledGatewayFactory, installed_child_command
 from paid_http_fake import answer
 
 
@@ -34,7 +34,7 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
         def log_message(self,*a):pass
     server=HTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
     endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions'
-    command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
+    command=installed_child_command()
     from delivery_api.child_supervisor import ChildSupervisor
     original=ChildSupervisor.__init__
     def supervisor(self,*a,**kw):kw['command']=command;original(self,**kw)
@@ -43,12 +43,7 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
     cloud_runtime.uninstall()
     try:
         with paid_child(store,endpoint) as (factory,runtime),tenant_context(A):
-            class Factory:
-                models=runtime.models;verify_vendor=None
-                def __call__(self,*a):return factory(*a)
-                def refresh_launch(self):pass
-                def close(self):pass
-            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:Factory())
+            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:InstalledGatewayFactory(factory,runtime))
             chosen=[]
             cloud_runtime.install(store,env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN.replace('user=sandbox','user=delivery_app'),VMODEL_ARTIFACTS_DIR=str(tmp_path)),chosen.append,paid_runtime=runtime)
             engine=inprocess_engine.current();engine.command=command;client=chosen[0]

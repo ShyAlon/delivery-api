@@ -10,7 +10,7 @@ def test_empty_pins_raise_typed_reason(monkeypatch):
  with pytest.raises(model_pins.NoApprovedModelPin):factory.refresh_launch()
 
 
-def test_no_pin_closes_both_routes_and_explains_operator_repair(monkeypatch):
+def test_no_pin_closes_both_routes_without_private_customer_vocabulary(monkeypatch):
  monkeypatch.setattr(cloud_runtime,'_state',None)
  monkeypatch.setattr(cloud_runtime,'_failure_code','no_approved_model_pin',raising=False)
  monkeypatch.setattr(cloud_runtime,'_failure','internal private detail')
@@ -19,11 +19,12 @@ def test_no_pin_closes_both_routes_and_explains_operator_repair(monkeypatch):
  for route in reply['routes']:
   assert route['available'] is False
   assert route['reason']=='no_approved_model_pin'
-  assert route['error']=='No approved model pin. Approve one in Back office > Model pins.'
-  assert route['operator_repair'] is True
+  assert route['error']=='No approved interview model is configured. Ask the operator to set one up.'
+  assert not route.get('operator_repair')
+  assert all(term not in str(route).lower() for term in ('back office','model pin','money gateway'))
   assert 'internal private' not in str(route)
  customer=m.model_routes(SimpleNamespace(admin=False))
- assert all('Back office' not in str(r) and not r.get('operator_repair') for r in customer['routes'])
+ assert customer==reply
 
 
 def test_other_startup_failure_never_claims_ollama_available(monkeypatch):

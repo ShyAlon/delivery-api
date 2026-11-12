@@ -171,7 +171,6 @@ class PostgresStore:
         self._map_dirty = ContextVar('postgres_session_map_dirty',default=False)
         self._answer_batch_policies=ContextVar('answer_batch_policies',default=False)
 
-    @_transactional
     def run_answer_batch(self,callback):
         """Explicit short local helper transaction. Never run provider work here.
 
@@ -300,7 +299,6 @@ class PostgresStore:
         self._connection.get().notify_after_commit(task_id)
         return [row['id'] for row in result]
 
-    @_transactional
     def add_engine_timing_batch(self,entries):
         """Persist only the already-received timing chunk, ordered and scoped by the live task mapping.
         One statement touches each matching task once and returns its ids for after-commit notifications."""
@@ -523,7 +521,6 @@ class PostgresStore:
         if retained is None or json.loads(retained['payload']) != json.loads(json.dumps(payload)):
             raise ValueError('conflicting retained decision review revision')
 
-    @_transactional
     def retain_answer_review(self,task_id,wait_id,revision,payload):
         """Answer reconciliation evidence, one atomic immutable insert/check.
 
@@ -536,7 +533,6 @@ class PostgresStore:
         if row is None or json.loads(row['payload'])!=json.loads(json.dumps(payload)):
             raise ValueError('conflicting retained answer review')
 
-    @_transactional
     def task_model_pin(self,task_id):
         """Current task generation and its retained immutable model-pin environment in one snapshot.
         This reads only the generation and retained review, never admission authority or a cached task projection."""
@@ -2037,7 +2033,6 @@ FROM tasks t"""
             raise AdmissionDenied('original owner stop authority required')
         self._execute_native("UPDATE worker_jobs SET state='done',updated_at=%s WHERE job_id=%s AND state='running'",(time.time(),job_id), write=True)
 
-    @_transactional
     def finish_answer_worker(self,capability,job_id,*,completion=None,event=None):
         """Atomic final answer status with live owner/auth/generation/Stop fence."""
         if current_scope()!=capability.scope:raise TenantAccessDenied('answer finish scope changed')
@@ -2602,6 +2597,12 @@ _TASK_ENTRY_OPERATIONS={
 _LOCAL_AUTH = {'create_oauth_state','consume_oauth_state','upsert_user','create_basic_user',
  'basic_user','create_session','session','rotate_session','delete_session','set_user_quota'}
 PG_OPERATIONS = (
+    'run_answer_batch',
+    'retain_answer_review',
+    'task_model_pin',
+    'finish_answer_worker',
+    'add_engine_timing_batch',
+
     'admit_provider_attempt',
     'activate_private_revision_installation',
     'add_artifact',

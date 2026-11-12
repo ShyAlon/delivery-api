@@ -17,7 +17,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 STUB_DIR = REPO / 'tests' / 'crosshost_stub'
 IE_SRC = Path(os.environ.get('DELIVERY_TEST_ENGINE_SOURCE', '')) / 'src'
-IE_VENV_PY = Path(os.environ.get('DELIVERY_TEST_ENGINE_SOURCE', '')) / '.venv/bin/python'
+# Use this run's installed dependencies, not a second sibling virtualenv.
+IE_VENV_PY = Path(sys.executable)
 GUARD_MSG = 'crosshost egress guard'
 
 def _child(python, code, pythonpath):

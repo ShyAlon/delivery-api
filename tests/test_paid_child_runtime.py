@@ -1,4 +1,5 @@
 """Disabled paid adapter seam: fake HTTP, actual children and disposable PG."""
+from paid_child_fixture import installed_child_command
 import json,sys,threading,uuid
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,HTTPServer
@@ -27,7 +28,7 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
         def log_message(self,*args):pass
     server=HTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
     endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions'
-    command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
+    command=installed_child_command()
     try:
         with paid_child(store,endpoint) as (factory,runtime),tenant_context(A):
             tid=store.create_task('paid child fake '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)

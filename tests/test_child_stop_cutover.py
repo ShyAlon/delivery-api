@@ -1,4 +1,5 @@
 """Stop accepted work in a fresh real graph child. Fake HTTP, disposable PG."""
+from paid_child_fixture import installed_child_command
 import asyncio,json,sys,threading,uuid,time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,HTTPServer
@@ -36,7 +37,7 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
         def settle_raw(self,a,u):self.states[a]='settled';settled.append(u)
         def uncertain(self,a):self.states[a]='uncertain';uncertain.append(a)
         def _attempt(self,a):return {'state':self.states[a]}
-    command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
+    command=installed_child_command()
     client=ChildInterviewClient(store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',command=command)
     detected=threading.Event();latency=[];changed=[None]
     original_run=client.supervisor.run_operation

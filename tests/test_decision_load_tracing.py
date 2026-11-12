@@ -7,6 +7,7 @@ No production semantics are changed by the instrumentation: fetch timeout, retry
 and navigation behavior are untouched; the pending observation is a log-only timer.
 """
 import json
+import pytest
 import os
 import time
 
@@ -23,10 +24,16 @@ ALLOWED_DETAIL_KEYS = {'wait_id', 'revision', 'step', 'epoch', 'outcome', 'durat
                        'reason', 'after_ms', 'current_epoch', 'pattern'}
 
 
-def test_decision_load_tracing(dsn, keys, tmp_path_factory):
+@pytest.fixture
+def tracing_host(dsn,keys,tmp_path_factory):
+    host=X.AdmittedHost('local',tmp_path_factory.mktemp('load-tracing'),keys,dsn)
+    try:yield host
+    finally:host.stop()
+
+
+def test_decision_load_tracing(tracing_host):
     from playwright.sync_api import sync_playwright
-    root = tmp_path_factory.mktemp('load-tracing')
-    host = X.AdmittedHost('local', root, keys, dsn)
+    host=tracing_host
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page()
@@ -47,8 +54,11 @@ def test_decision_load_tracing(dsn, keys, tmp_path_factory):
                    'Rainy days are automatically refunded.', 'Owners see a daily roster.',
                    'Instructors confirm from their phone.', 'Weekly payouts are automatic.']
         X.pump_interview(page, host.base, task_id, answers, finish=False, timeout=120)
-        page.wait_for_selector('#opendecision', timeout=15000)
-        href = page.locator('#opendecision').get_attribute('href')
+        # Concept review now opens automatically; read its real current URL.
+        X.open_current_decision(page)
+        from urllib.parse import urlsplit
+        current = urlsplit(page.url)
+        href = current.path + ('?' + current.query if current.query else '')
         real = page.request.get(host.base + '/api' + href).json()
         pat = '**/api/tasks/*/decisions/**'
 

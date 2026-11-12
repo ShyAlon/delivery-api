@@ -1,4 +1,5 @@
 """Real graph/child and zero-cost production admission, fixture HTTP only."""
+from paid_child_fixture import installed_child_command
 import json,sys,uuid
 import pytest
 from pathlib import Path
@@ -28,7 +29,7 @@ def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp
         def for_task(self,tid):return factory
         def __call__(self,cap,job):return factory(cap,job)
     pinned=PinnedFactory()
-    command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
+    command=installed_child_command()
     try:
         with tenant_context(A):
             tid=store.create_task('real image zero child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)

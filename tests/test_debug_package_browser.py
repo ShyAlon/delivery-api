@@ -78,7 +78,7 @@ def test_shared_loading_is_animated_and_respects_reduced_motion(pg_page,pg_ui,tm
  assert status.evaluate('e=>getComputedStyle(e,"::before").animationName')=='none'
 
 
-def test_empty_model_pins_disable_routes_and_show_fixed_operator_repair(pg_page,pg_ui,pg_ids,pg_browser,tmp_path):
+def test_empty_model_pins_disable_routes_and_keep_customer_repair_wording(pg_page,pg_ui,pg_ids,pg_browser,tmp_path):
  page=pg_page
  _operator_cookie(page,pg_ui,pg_browser[2])
  page.route('**/api/model-routes',lambda r:r.fulfill(json={'managed':True,'default_route':None,'routes':[{'id':p,'available':False,'managed':True,'reason':'no_approved_model_pin','operator_repair':True,'error':'private arbitrary text must never render'} for p in ('deepseek','ollama')]}))
@@ -86,7 +86,8 @@ def test_empty_model_pins_disable_routes_and_show_fixed_operator_repair(pg_page,
  for name in ('DeepSeek','Ollama'):
   expect(page.get_by_role('button',name=name,exact=True)).to_be_disabled()
  expect(page.get_by_role('button',name='Start interview',exact=True)).to_be_disabled()
- expect(page.locator('.route-unavailable').first).to_contain_text('No approved model pin. Approve one in Back office > Model pins.')
+ expect(page.locator('.route-unavailable').first).to_contain_text('No approved interview model is configured. Ask the operator to set one up.')
+ assert not any(term in page.locator('body').inner_text().lower() for term in ('back office','model pin','money gateway'))
  assert 'private arbitrary text' not in page.locator('body').inner_text()
  assert page.locator('[data-start-route][aria-pressed="true"]').count()==0
  expect(page.locator('.not-started')).to_contain_text('Your task is saved.')

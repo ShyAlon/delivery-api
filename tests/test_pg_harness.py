@@ -32,3 +32,20 @@ def test_repeated_start_preserves_owned_server_for_warm_runs():
     before = dict(pg_harness.STATE)
     pg_harness.start()
     assert pg_harness.STATE == before
+
+
+def test_isolated_acceptance_database_is_seeded_and_removed_after_failure():
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+    name=None
+    with pytest.raises(RuntimeError,match='fixture failure'):
+        with pg_harness.isolated_database() as dsn:
+            name=conninfo_to_dict(dsn)['dbname']
+            assert name!=conninfo_to_dict(pg_harness.STATE['dsn'])['dbname']
+            with psycopg.connect(dsn) as connection:
+                assert connection.execute('SELECT count(*) FROM auth.sessions').fetchone()[0]==2
+                assert connection.execute('SELECT count(*) FROM credit_accounts').fetchone()[0]==0
+                connection.execute("INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES('00000000-0000-0000-0000-000000000001',0,1000000000,0)")
+            raise RuntimeError('fixture failure')
+    with psycopg.connect(pg_harness.STATE['dsn']) as connection:
+        assert connection.execute('SELECT count(*) FROM pg_database WHERE datname=%s',(name,)).fetchone()[0]==0
