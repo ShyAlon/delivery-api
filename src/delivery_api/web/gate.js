@@ -1,7 +1,7 @@
 import {activationAllowed} from './pointer-activation.js';
 import {Page} from './page-component.js';
 import {Dialog} from './shared-dialog.js';
-import {runAction} from './ui-action.js';
+import {runAction,beginFormPending} from './ui-action.js';
 import {api,esc,reveal} from './client-core.js';
 import {onPageExit,pageEpoch,pageStale} from './page-lifecycle.js';
 import {explainerHtml,titleCase,titleCaseHeadings,pillifySelects,syncPills,collapseCards} from './gate-ui.js';
@@ -94,12 +94,12 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
   if(query.get('item'))panel.querySelectorAll('article')[items.findIndex(f=>f.item_id===query.get('item'))]?.scrollIntoView();
 
   undecidedItems=items.filter(f=>!resolved.has(f.item_id)).length;updateDecision();
-  panel.querySelector('#apply-semantic').onclick=async()=>runAction(`gate.semantic:${taskId}:${gateKey}`,panel.querySelector('#apply-semantic'),async()=>{const status=panel.querySelector('#semantic-status');try{
+  panel.querySelector('#apply-semantic').onclick=async()=>runAction(`gate.semantic:${taskId}:${gateKey}`,panel.querySelector('#apply-semantic'),async()=>{const status=panel.querySelector('#semantic-status');let pending;try{
     const decisions=items.map((f,i)=>{const action=panel.querySelector(`[name="semantic-action-${i}"]`).value;if(!action)throw new Error('Choose for every flagged item.');return {item_id:f.item_id,action,...(action==='replace'?{replacement:readReplacement(panel,i,f.original)}:{})}});
-    status.textContent='Validating item decisions…';
+    pending=beginFormPending(panel,{status,label:'Validating item decisions…'});if(!pending)return;
     await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/semantic-review`,{method:'POST',body:JSON.stringify({revision:semantic.revision,decisions})});
-    semanticSaved=true;status.innerHTML=`Decisions saved. <a href="${gateUrl(taskId,gateKey)}">Open reviewed gate</a>`;
-  }catch(error){status.textContent=error.message;if(error.status===409){staleNote='This review changed. Reload before deciding.';updateDecision()}}}).finally(()=>{panel.querySelector('#apply-semantic').disabled=semanticSaved||!!staleNote});
+    semanticSaved=true;pending.accepted();status.innerHTML=`Decisions saved. <a href="${gateUrl(taskId,gateKey)}">Open reviewed gate</a>`;
+  }catch(error){pending?.release();status.textContent=error.message;if(error.status===409){staleNote='This review changed. Reload before deciding.';updateDecision()}}}).finally(()=>{panel.querySelector('#apply-semantic').disabled=semanticSaved||!!staleNote});
   if(!data.actionable)panel.querySelectorAll('textarea,select,button').forEach(c=>c.disabled=true);
  }
 
@@ -120,15 +120,15 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
    if(option){const i=option.dataset.slot;panel.querySelector(`[name="stack-text-${i}"]`).value=option.dataset.value;return}
    const save=e.target.closest('.stack-save');if(!save)return;
    const status=panel.querySelector('#stack-status'),i=save.dataset.slot;
-   await runAction(`gate.stack:${taskId}:${gateKey}`,save,async()=>{try{
+   await runAction(`gate.stack:${taskId}:${gateKey}`,save,async()=>{let pending;try{
     const text=panel.querySelector(`[name="stack-text-${i}"]`).value.trim(),reason=panel.querySelector(`[name="stack-reason-${i}"]`).value.trim();
     if(!text)throw new Error('Your change needs a choice.');
-    status.textContent='Saving…';
+    pending=beginFormPending(panel,{status,label:'Saving technical choice…'});if(!pending)return;
     await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/stack-decisions`,{method:'POST',body:JSON.stringify({revision:stack.revision,decisions:[{key:stack.slots[i].key,text,reason}]})});
-    stackSaved=true;status.innerHTML=`Change Saved. <a href="${gateUrl(taskId,gateKey)}">Open Reviewed Gate</a>`;
+    stackSaved=true;pending.accepted();status.innerHTML=`Change Saved. <a href="${gateUrl(taskId,gateKey)}">Open Reviewed Gate</a>`;
     // Saved choice changed gate evidence. Review it rather than approve an old revision.
     staleNote='Your saved change updated the evidence. Open the reviewed gate before deciding.';updateDecision();form.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);
-   }catch(error){status.textContent=error.message;if(error.status===409){staleNote='This review changed. Reload before deciding.';updateDecision()}}}).finally(()=>{save.disabled=stackSaved||!!staleNote});
+   }catch(error){pending?.release();status.textContent=error.message;if(error.status===409){staleNote='This review changed. Reload before deciding.';updateDecision()}}}).finally(()=>{save.disabled=stackSaved||!!staleNote});
   });
   if(!data.actionable)panel.querySelectorAll('textarea,input,button').forEach(c=>c.disabled=true);
  }
@@ -138,11 +138,13 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
  document.querySelector('#gate-save-draft').onclick=async()=>runAction(`gate.draft:${taskId}:${gateKey}`,document.querySelector('#gate-save-draft'),async()=>{try{const saved=await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/drafts`,{method:'POST',body:JSON.stringify({revision:review.revision,choice:form.elements.selected_option.value,rationale:form.elements.edited_text.value,comment:form.elements.comment.value,semantic_decisions:(semantic?.findings||[]).filter((f,i,a)=>a.findIndex(x=>x.item_id===f.item_id)===i).map((f,i)=>({item_id:f.item_id,action:host.querySelector(`[name="semantic-action-${i}"]`)?.value||'',replacement_text:host.querySelector(`[name="semantic-replacement-${i}"]`)?.value||''}))})});history.replaceState({},'',gateUrl(taskId,gateKey,review.revision)+'&draft='+encodeURIComponent(saved.draft_id)+(query.get('item')?'&item='+encodeURIComponent(query.get('item')):''));document.querySelector('#gate-permalink').href=location.pathname+location.search;document.querySelector('#gate-decision-status').textContent='Draft saved. This link restores it.'}catch(e){document.querySelector('#gate-decision-status').textContent=e.message}});
  if(!data.actionable)form.querySelectorAll('input,textarea,select,button').forEach(c=>c.disabled=true);
  let gateRefreshPending=false,gateRefreshTimer=null;
+ const decisionPending=()=>form.getAttribute('aria-busy')==='true'||gateCommitted||Boolean(host.querySelector('[aria-busy="true"]'));
  async function refreshGateEvidence(){
-   if(!data.actionable||gateRefreshPending||!host.isConnected)return;
+   if(!data.actionable||gateRefreshPending||!host.isConnected||decisionPending())return;
    gateRefreshPending=true;
    try{
      const live=await api(`/api/tasks/${taskId}`);
+     if(decisionPending())return;
      const control=live.control_snapshot;
      const current=live.gates.find(item=>item.gate_key===gateKey);
      if(control&&control.mode==='waiting_gate'&&control.wait_id!==gateKey)
@@ -154,12 +156,13 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
        return;
      }
      const updated=await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/review`);
+     if(decisionPending())return;
      if(updated.review.revision!==review.revision){document.querySelector('#gate-decision-status').textContent='Gate evidence changed. Reload the current gate before deciding.';staleNote='The gate evidence changed. Reload the current gate before deciding.';updateDecision();return}
      g.revision=current.revision;
      currentPhaseArtifacts=(live.artifacts||[]).filter(a=>a.phase_key===phase&&!a.stale);
      currentArtifacts=currentPhaseArtifacts.filter(a=>a.present!==false&&a.valid!==false);
      await renderGateArtifacts();
-   }catch(e){document.querySelector('#gate-decision-status').textContent=`Could not refresh gate evidence: ${e.message}`}
+   }catch(e){if(!decisionPending())document.querySelector('#gate-decision-status').textContent=`Could not refresh gate evidence: ${e.message}`}
    finally{gateRefreshPending=false}
  }
  onPageExit(()=>gateEvents.close());const gateEvents=new EventSource(`/api/tasks/${taskId}/stream`);
@@ -178,7 +181,7 @@ if(currentArtifacts.length){host.innerHTML='';reveal(host);for(const a of curren
  },5000);
  gateDispose=()=>{clearInterval(gateRefreshInterval);clearTimeout(gateRefreshTimer);gateEvents.close?.()};
  form.querySelectorAll('select[name=next_model],select[name=redo_model]').forEach(select=>select.onchange=()=>{form.querySelector(`[data-model-for="${select.name}"]`).textContent=select.value?`Selected override: ${select.value}`:(select.required?'No recorded exact model. Choose one before continuing.':`${(select.name==='redo_model'?redoChoice:defaultChoice)?.source==='legacy generator configuration (no recorded exact selection)'?'Legacy generator fallback':'Current task default'}: ${select.name==='redo_model'?redoModel:defaultModel}`);updateDecision()});const open=document.querySelector('#gateopen');open.onchange=async()=>runAction(`gate.toggle:${taskId}:${gateKey}`,open,async()=>{let requested=open.checked;try{let updated=await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/toggle`,{method:'POST',body:JSON.stringify({is_open:requested})});g.is_open=Boolean(updated.is_open);g.revision=updated.revision;open.checked=g.is_open;document.querySelector('#gatestatus').textContent=g.is_open?'Gate opened.':'Gate closed.'}catch(e){open.checked=!requested;document.querySelector('#gatestatus').textContent=e.message}});
- document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>runAction(`gate.decide:${taskId}:${gateKey}`,Array.from(form.querySelectorAll('[data-action]')),async()=>{const form=document.querySelector('#gateform'),d=Object.fromEntries(new FormData(form)),chosen=button.dataset.action==='redo'?d.redo_model:d.next_model;delete d.redo_model;delete d.next_model;if(!chosen&&(button.dataset.action==='redo'?redoChoice:defaultChoice)?.source==='selection required'){document.querySelector('#gate-decision-status').textContent='Choose a model before continuing.';return}if(chosen){let [model_route,...model]=chosen.split(':');d.model_route=model_route;d.model=model.join(':')}d.action=button.dataset.action;d.expected_revision=g.revision;d.review_revision=review.revision;if(d.action==='redo'&&!String(d.steer||'').trim()){document.querySelector('#gate-decision-status').textContent='a redo needs a reason: describe what should change.';return}document.querySelector('#gate-decision-status').innerHTML='<span class="waiting-spinner" aria-hidden="true"></span> Saving decision and starting the next step…';try{await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/decide`,{method:'POST',body:JSON.stringify(d)});gateCommitted=true;sessionStorage.setItem(`phase-transition:${taskId}`,JSON.stringify({from:phase,target:d.action==='redo'?phase:t.phases[t.phases.findIndex(p=>p.phase_key===phase)+1]?.phase_key||null,started:Date.now()}));location.href=`/tasks/${encodeURIComponent(taskId)}/view`}catch(e){if(e.status===409){staleNote='This decision changed. Reload the current review before deciding.';updateDecision()}else{form.querySelectorAll('[data-action]').forEach(b=>b.disabled=false);updateDecision()}document.querySelector('#gate-decision-status').innerHTML=`<div class="notice">${esc(e.message)}</div>`}}).finally(updateDecision));
+ document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>runAction(`gate.decide:${taskId}:${gateKey}`,Array.from(form.querySelectorAll('[data-action]')),async()=>{const form=document.querySelector('#gateform'),d=Object.fromEntries(new FormData(form)),chosen=button.dataset.action==='redo'?d.redo_model:d.next_model;delete d.redo_model;delete d.next_model;if(!chosen&&(button.dataset.action==='redo'?redoChoice:defaultChoice)?.source==='selection required'){document.querySelector('#gate-decision-status').textContent='Choose a model before continuing.';return}if(chosen){let [model_route,...model]=chosen.split(':');d.model_route=model_route;d.model=model.join(':')}d.action=button.dataset.action;d.expected_revision=g.revision;d.review_revision=review.revision;if(d.action==='redo'&&!String(d.steer||'').trim()){document.querySelector('#gate-decision-status').textContent='a redo needs a reason: describe what should change.';return}const pending=beginFormPending(form,{status:document.querySelector('#gate-decision-status'),scope:form.closest('.gate-page'),button,label:'Saving decision and starting the next step…'});if(!pending)return;try{await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/decide`,{method:'POST',body:JSON.stringify(d)});gateCommitted=true;pending.accepted();document.querySelector('#gate-decision-status').textContent='Decision saved. Opening task progress…';sessionStorage.setItem(`phase-transition:${taskId}`,JSON.stringify({from:phase,target:d.action==='redo'?phase:t.phases[t.phases.findIndex(p=>p.phase_key===phase)+1]?.phase_key||null,started:Date.now()}));location.href=`/tasks/${encodeURIComponent(taskId)}/view`}catch(e){pending.release();if(e.status===409){staleNote='This decision changed. Reload the current review before deciding.';updateDecision()}else{form.querySelectorAll('[data-action]').forEach(b=>b.disabled=false);updateDecision()}document.querySelector('#gate-decision-status').innerHTML=`<div class="notice">${esc(e.message)}</div>`}},{keepDisabledOnSuccess:true}).finally(updateDecision));
 }
 
 

@@ -362,3 +362,23 @@ details.review-progress>summary{padding:10px 12px;border-radius:10px;cursor:poin
 details.review-progress>summary:focus-visible{outline:2px solid #16a36a;outline-offset:2px}
 details.review-progress .progress-history{padding:0 12px 10px}
 .semantic-footer #semanticstatus{flex:1 1 auto;min-width:0}.semantic-footer #semanticstatus:empty{display:none}
+
+/* Disabled radio cards must look locked too: their inputs are visually hidden. */
+.pill:has(input:disabled){cursor:not-allowed;opacity:.5}
+.pill input:disabled,.pill input:disabled+span{cursor:not-allowed}
+.decision-option:has(input:disabled){opacity:.55;cursor:not-allowed}
+.pending-message{display:flex;align-items:center;gap:8px;font-weight:600;margin:4px 0 12px}
+/* Evidence and actions stay together; optional notes never displace live feedback. */
+#semanticform{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,360px);gap:24px;align-items:start}
+#semanticform .semantic-evidence,#semanticform .semantic-controls{min-width:0}
+#semanticform .semantic-item{padding:16px 0;margin:0 0 16px}
+#semanticform .semantic-item:first-child{border-top:0}
+#semanticform .semantic-controls{position:sticky;top:calc(var(--global-header-height,84px) + 12px);border:1px solid var(--line);border-radius:16px;padding:16px;background:var(--card)}
+#semanticform .semantic-footer,#semanticform.applying .semantic-footer{position:static;display:flex;flex-direction:column;align-items:stretch;margin:12px 0 0;padding:0;border:0;box-shadow:none;background:transparent;backdrop-filter:none}
+#semanticform .decision-note{border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;margin:12px 0 0;padding:10px 0}
+#semanticform .decision-note>summary{font-size:var(--fs-sm);cursor:pointer}
+#semanticform .decision-note textarea{min-height:64px}
+#semanticform .decision-pills label{display:inline-flex;margin:0}
+#semanticform .flag-original blockquote{margin:8px 0 12px}
+#semanticstatus{scroll-margin-top:calc(var(--global-header-height,84px) + 16px)}
+@media(max-width:850px){#semanticform{grid-template-columns:minmax(0,1fr);gap:12px}#semanticform .semantic-controls{position:static}#semanticform .semantic-footer button{width:100%}}
