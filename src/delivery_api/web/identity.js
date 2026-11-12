@@ -1,11 +1,11 @@
 import {renderAuthScreen,mountAccountMenu} from './account-component.js';
 import {Dialog} from './shared-dialog.js';
 import {Table} from './table-component.js';
-import {collectDebugEvidence,collectExportGroups} from './debug-package.js';
+import {collectTaskCosts,collectDebugEvidence,collectExportGroups} from './debug-package.js';
 import {readSection} from './debug-sections.js';
 import {returnPage} from './return-page.js';
 import {api,clientLog,esc,setSessionExpiry,renewSessionIfDue,downloadDebug,browserDiagnostics,requestTable,clientReport,serverReport,deliverText,deliverTextZip,downloadTextZip} from './client-core.js';
-import {scrubText,scrubPart} from './log-scrub.js';
+import {scrubText,scrubPart,scrubJson} from './log-scrub.js';
 import {buildDiagnosticSummary,formatPreflightReport,requestCostColumns,requestCostRows,requestCostSlowestColumns,sortRequestCostRows,formatRequestCostsText} from './debug-digest.js';
 import {actionBusy,actionIdle,logEnter} from './ui-action.js';
 const app=document.querySelector('#app'),modal=document.querySelector('#modal');
@@ -26,7 +26,7 @@ async function watchRuntime(){try{let r=await fetch('/health',{cache:'no-store'}
 watchRuntime();runtimeWatch=setInterval(watchRuntime,30000);setInterval(()=>{if(!document.hidden)renewSessionIfDue().catch(()=>{})},60000);
 let authState={mode:'local',authenticated:true,actor:'local user',admin:true,providers:[]};
 window.addEventListener('requi:signin-needed',()=>{authState={...authState,authenticated:false};if(document.querySelector('#signinneeded'))return;const notice=document.createElement('div');notice.id='signinneeded';notice.className='notice';notice.setAttribute('role','status');notice.textContent='Your sign-in expired. Sign in again before continuing. Your draft on this page has been kept.';const link=document.createElement('a');link.textContent=' Sign in in a new tab';link.href='/';link.target='_blank';link.rel='noopener';notice.append(link);document.querySelector('header')?.after(notice)});
-function safeDebug(value){if(Array.isArray(value))return value.map(safeDebug);if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,/(password|secret|token|authorization|cookie|api.?key|credential)/i.test(k)?'[REDACTED]':safeDebug(v)]));return typeof value==='string'?value.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi,'Bearer [REDACTED]'):value}
+const safeDebug=scrubJson;
 function buildLabel(live){let repos=live?.repositories||{},names=Object.keys(repos);if(names.length)return names.map(n=>`${n} ${repos[n]}`).join(', ');return String(live?.runtime_id||runtimeVersion||'unknown').slice(0,7)}
 function authScreen(){renderAuthScreen(app,authState)}
 async function loadIdentity(){authState=await api('/api/auth');setSessionExpiry(authState.expires_at);const identity=document.querySelector('#identity');if(!authState.authenticated){identity.innerHTML='<a class="auth-link" href="/">Sign in</a>';authScreen();if(!window.__authGuard){window.__authGuard=true;document.addEventListener('click',e=>{let link=e.target.closest('a[href]');if(!link)return;let url=new URL(link.href,location.href);if(url.origin===location.origin&&url.pathname!='/about'){e.preventDefault();clientLog('access.blocked','Protected navigation blocked without reload',{target:url.pathname});authScreen();history.replaceState({},'',location.pathname);document.querySelector('.auth-card')?.animate([{opacity:.65,transform:'scale(.985)'},{opacity:1,transform:'scale(1)'}],{duration:220,easing:'ease-out'})}},true)}return false}mountAccountMenu(identity,authState,{onDebug:async()=>{
@@ -55,7 +55,7 @@ document.querySelector('#copysummary').onclick=async e=>{const btn=e.currentTarg
 }catch(err){ok=false;btn.textContent='Failed';status.textContent='Copy summary failed: '+err.message}finally{btn.disabled=false;setTimeout(()=>{btn.textContent=idle},ok?2500:6000)}};
 document.querySelector('#downloadeverything').onclick=async e=>{const btn=e.currentTarget,idle=btn.textContent;btn.disabled=true;btn.textContent='Preparing…';let ok=true;try{
  const exportBegan=performance.now(),collectorTimings=[],parts=[],add=(title,text)=>parts.push(`===== ${title} =====\n${scrubPart(text)}`);
- parts.push(`===== Known omissions =====\n${['Known omissions and capture scope:','- Task-window retained logs include all available exact task/session-attributed delivery and engine records for operators, with explicit retention/export limits; the separate live tail is still bounded.','- Provider audit internals (raw LLM call and usage files) stay server-side by policy and are not in this ZIP.','- Browser capture covers only this tab since '+browserDiagnostics().started_at+'.','- Server logs cover only the window named in their section below.','- A section that failed to load appears inline as {\"error\": ...}.'].join('\n')}`);
+ parts.push(`===== Known omissions =====\n${['Known omissions and capture scope:','- Task-window retained logs include all available exact task/session-attributed delivery and engine records for operators, with explicit retention/export limits; the separate live tail is still bounded.','- Raw provider requests/responses stay server-side. Numeric usage and frozen accounting evidence are included; missing historical call joins or expense remain unknown.','- Browser capture covers only this tab since '+browserDiagnostics().started_at+'.','- Server logs cover only the window named in their section below.','- A section that failed to load appears inline as {\"error\": ...}.'].join('\n')}`);
  const initial=await collectExportGroups([
   ()=>taskId?api(`/api/tasks/${encodeURIComponent(taskId)}/diagnostics`):null,
   ()=>collectDebugEvidence({taskId,operator:!!authState.admin,cloud:authState.mode==='supabase',api})
@@ -66,13 +66,13 @@ document.querySelector('#downloadeverything').onclick=async e=>{const btn=e.curr
  const evidence=initial[1].value;
  parts.push('===== Evidence manifest and DB projections =====\n'+scrubPart(JSON.stringify(evidence,null,2)));
  const sections=[['Task-window retained logs',async()=>{if(!taskId)throw new Error('No selected task');return JSON.stringify(await api(`/api/tasks/${encodeURIComponent(taskId)}/log-window`),null,2)}],['Debug info',()=>debugInfoText(diag?.__unavailable?{error:diag.__unavailable}:diag)]];
- if(taskId){sections.push(['Task diagnostics (question, control state, engine state)',()=>{if(diag?.__unavailable)throw new Error(diag.__unavailable);return JSON.stringify(diag,null,2)}],['Run events',async()=>{const taskData=await api(`/api/tasks/${encodeURIComponent(taskId)}`);return JSON.stringify(taskData?.events||taskData,null,2)}])}
+ if(taskId){sections.push(['Full task call and cost evidence',async()=>JSON.stringify(await collectTaskCosts({taskId,api}),null,2)],['Task diagnostics (question, control state, engine state)',()=>{if(diag?.__unavailable)throw new Error(diag.__unavailable);return JSON.stringify(diag,null,2)}],['Run events',async()=>{const taskData=await api(`/api/tasks/${encodeURIComponent(taskId)}`);return JSON.stringify(taskData?.events||taskData,null,2)}])}
  sections.push(['Server logs (last 30 min)',async()=>(await serverText()).text],['Client logs (this tab)',async()=>(await clientText()).text]);
  const collected=evidence.sections.filter(x=>x.availability==='available').map(x=>x.source),unavailable=evidence.sections.filter(x=>x.availability==='unavailable').map(x=>x.source),total=sections.length+evidence.sections.filter(x=>x.availability!=='policy_excluded').length;
  status.innerHTML='<span class="waiting-spinner"></span> Collecting remaining evidence (up to two groups at a time)…';
  const activeGroups=new Set();
  const groupResults=await collectExportGroups(sections.map(([,collect])=>collect),(index,active)=>{if(active)activeGroups.add(index);else activeGroups.delete(index);status.textContent=`Collecting section: ${[...activeGroups].map(i=>sections[i][0]).join(' + ')} (up to two groups at a time)…`});
- for(let n=0;n<sections.length;n++){const title=sections[n][0],result=groupResults[n];if(result.error){add(title,JSON.stringify({error:String(result.error.message||result.error)}));unavailable.push(title)}else{add(title,result.value);collected.push(title)}collectorTimings.push({source:title,duration_ms:result.duration_ms});}
+ for(let n=0;n<sections.length;n++){const title=sections[n][0],result=groupResults[n];if(result.error){add(title,JSON.stringify({error:String(result.error.message||result.error)}));unavailable.push(title)}else{add(title,result.value);if(title==='Full task call and cost evidence'&&JSON.parse(result.value).complete!==true)unavailable.push(title);else collected.push(title)}collectorTimings.push({source:title,duration_ms:result.duration_ms});}
  parts.push('===== Export collector timings =====\n'+JSON.stringify({total_ms:Math.round(performance.now()-exportBegan),stages:[...evidence.sections.map(x=>({source:x.source,duration_ms:x.duration_ms??null,availability:x.availability})),...collectorTimings]},null,2));
  status.textContent=`Collected ${collected.length} of ${total} sections${unavailable.length?'; unavailable: '+unavailable.join(', '):''}. Writing ZIP…`;
  downloadTextZip(parts.join('\n\n'),'requi-everything.txt');btn.textContent='Downloaded';status.textContent=`Downloaded requi-everything.zip: ${collected.length} of ${total} sections collected${unavailable.length?'; unavailable: '+unavailable.join(', '):''}. Read Known omissions and task-window limits; rotated or never-recorded output cannot be recovered.`

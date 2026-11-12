@@ -2342,6 +2342,10 @@ FROM tasks t"""
         from . import credit_history
         return credit_history.last_topup(SimpleNamespace(execute=self._execute_native))
 
+    def task_cost_export(self,task_id,source,after=''):
+        from .task_cost_export import page
+        return page(self,task_id,source,after)
+
     def own_ledger(self,usd_per_credit):
         """Read-only: the signed-in owner's credit balance and provider-call ledger, as text for the Debug dialog."""
         from .account_ledger import read
@@ -2737,6 +2741,7 @@ PG_OPERATIONS = (
     'task_artifacts',
     'task_phase_credits',
     'task_child_cost',
+    'task_cost_export',
     'task_retail_totals',
     'task_snapshot',
     'task_worker_state',

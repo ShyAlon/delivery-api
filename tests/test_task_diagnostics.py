@@ -104,7 +104,7 @@ def test_model_calls_projects_each_call_and_aggregates_by_stage(tmp_path):
     assert cat["load_ms"]==800 and cat["prompt_eval_ms"]==2100 and cat["eval_ms"]==11300
 
 
-def test_model_calls_cloud_drops_token_counts_and_rates(tmp_path):
+def test_model_calls_cloud_preserves_approved_numeric_counts_and_rates(tmp_path):
     rows=[{"event":"llm_call_end","ts":"t","stage":"probing","provider":"ollama","model":"phi4",
            "latency_s":14.2,"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},
            "keep_alive":"30m","tokens_per_s":18.1,
@@ -112,10 +112,10 @@ def test_model_calls_cloud_drops_token_counts_and_rates(tmp_path):
     _llm_lines(tmp_path, rows)
     out=td.model_calls((tmp_path/'llm-calls.jsonl').read_bytes(),cloud=True)
     call=out["calls"][0]
-    assert "usage" not in call and "tokens_per_s" not in call
-    assert call["timing"]=={"total_ms":14200,"load_ms":800,"prompt_eval_ms":2100,"eval_ms":11300}  # durations stay, counts go
+    assert call["usage"]==rows[0]["usage"] and call["tokens_per_s"]==18.1
+    assert call["timing"]==rows[0]["timing"]  # Owner approved numeric evidence in cloud too.
     agg=out["by_stage"][0]
-    assert "input_tokens" not in agg and "output_tokens" not in agg
+    assert agg["input_tokens"]==10 and agg["output_tokens"]==5
     assert agg["calls"]==1 and agg["total_s"]==14.2
 
 
@@ -146,8 +146,8 @@ def _case_diagnostics_route_includes_model_calls_when_session_recorded(monkeypat
     out=reply.json()["model_calls"]
     assert out["calls"][0]["stage"]=="probing" and out["calls"][0]["keep_alive"]=="30m"
     assert out["by_stage"]==[{"provider":"ollama","model":"phi4","stage":"probing","calls":1,
-                              "total_s":14.2,"mean_s":14.2}]
-    assert "input_tokens" not in str(out) and "output_tokens" not in str(out)
+                              "total_s":14.2,"mean_s":14.2,"input_tokens":10,"output_tokens":5}]
+    assert out["calls"][0]["usage"]=={"input_tokens":10,"output_tokens":5}
 
 
 def _case_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace):
@@ -181,3 +181,10 @@ def _check_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_
 def test_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
     pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
     _case_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace)
+
+
+def test_model_calls_does_not_silently_keep_only_newest_300():
+ import json
+ raw='\n'.join(json.dumps({'event':'llm_call_end','stage':'conops','latency_s':1,'usage':{'input_tokens':i,'output_tokens':1}}) for i in range(351)).encode()
+ out=td.model_calls(raw,cloud=True)
+ assert len(out['calls'])==351 and out['calls'][0]['usage']['input_tokens']==0

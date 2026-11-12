@@ -1,6 +1,6 @@
 """Bounded diagnostic export. No user-selected filesystem paths or uploads."""
 from __future__ import annotations
-import io,json,re,zipfile,os,shlex
+import io,json,re,zipfile,os,shlex,math
 from pathlib import Path
 from datetime import datetime,timezone
 
@@ -8,11 +8,32 @@ SENSITIVE=re.compile(r'(password|passwd|passcode|secret|token|authorization|cook
 SECRET_TEXT=re.compile(r'''(?ix)(["']?\b[A-Za-z0-9_.-]*(?:password|passwd|passcode|secret|token|authorization|cookie|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)''')
 BEARER=re.compile(r'(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+')
 
+# Exact numeric evidence fields only. A matching name with a string, object,
+# boolean, negative or non-finite value is never exempt from redaction.
+METRIC_COUNTS=frozenset(('input_tokens','output_tokens','total_tokens','cache_hit_tokens','cache_miss_tokens','prompt_eval_count','eval_count'))
+METRIC_RATES=frozenset(('tokens_per_s',))
+
+def safe_numeric_metric(key,value):
+ return (key in METRIC_COUNTS and type(value) is int and 0<=value<=2**53-1 or
+         key in METRIC_RATES and ((type(value) is int and 0<=value<=2**53-1) or
+                                (type(value) is float and math.isfinite(value) and value>=0)))
+
+def _redact_field(key,value):
+ if key in METRIC_COUNTS|METRIC_RATES:return value if safe_numeric_metric(key,value) else '[REDACTED]'
+ return '[REDACTED]' if SENSITIVE.search(key) else redact(value)
+
+def _redact_assignment(match):
+ prefix=match[1];key=prefix.split(':',1)[0].split('=',1)[0].strip().strip("\"'")
+ raw=match[0][len(prefix):]
+ try:value=json.loads(raw)
+ except ValueError:value=None
+ return match[0] if safe_numeric_metric(key,value) else prefix+'[REDACTED]'
+
 def redact(value):
- if isinstance(value,dict):return {k:('[REDACTED]' if SENSITIVE.search(k) else redact(v)) for k,v in value.items()}
+ if isinstance(value,dict):return {k:_redact_field(k,v) for k,v in value.items()}
  if isinstance(value,list):return [redact(v) for v in value]
  if isinstance(value,str):
-  text=SECRET_TEXT.sub(r'\1[REDACTED]',BEARER.sub('Bearer [REDACTED]',value))
+  text=SECRET_TEXT.sub(_redact_assignment,BEARER.sub('Bearer [REDACTED]',value))
   for name,secret in os.environ.items():
    if SENSITIVE.search(name) and len(secret)>=8:text=text.replace(secret,'[REDACTED]')
   return text
