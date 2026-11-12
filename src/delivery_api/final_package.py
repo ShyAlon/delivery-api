@@ -26,10 +26,12 @@ def package(task,session,handoff,folder:Path,*,source=None):
     except ValueError as exc:raise PackageBlocked('Invalid producer handoff: '+str(exc)) from exc
     if handoff['session_id']!=session:raise PackageBlocked('Export belongs to another run')
     if handoff.get('blocked_reasons'):raise PackageBlocked('Open founder inputs block final package: '+'; '.join(handoff['blocked_reasons']))
-    files=handoff['files']
+    files=dict(handoff['files'])
+    from .coding_agent_prompt import PROMPT_PATH,render_prompt
     required={'README.md','founder-decisions.json','founder-decisions.md','decisions.json','interview/intent_model.json','interview/conops.json','spec/needs.json','spec/srs.json','spec/architecture.json','spec/items.json','spec/tests.json','spec/AGENTS.md','spec/manifest.json','spec/traceability.json'}
     if not required.issubset(files):raise PackageBlocked('Missing export outputs: '+', '.join(sorted(required-set(files))))
     expected={'README.md','founder-decisions.json','founder-decisions.md','decisions.json','interview/intent_model.json','interview/conops.json','spec/needs.json','spec/srs.json','spec/architecture.json','spec/items.json','spec/tests.json','spec/validation.json','spec/AGENTS.md','spec/manifest.json','spec/traceability.json','spec/system-baseline.json'}
+    expected.add(PROMPT_PATH)
     expected|={'interview/semantic-review.json','spec/srs.semantic-review.json'}
     expected|={'docs/'+name+'.md' for name in ('README','intent','conops','needs','architecture','requirements','tests','validation','traceability','findings','changes','run')}
     companions={n[:-5]+'.md' for n in expected if n.endswith('.json') and n.startswith(('interview/','spec/'))}
@@ -40,8 +42,12 @@ def package(task,session,handoff,folder:Path,*,source=None):
         if path.is_absolute() or '..' in path.parts or (name not in expected|companions and not safe_spec and not safe_doc):raise PackageBlocked('Unexpected export file: '+name)
         if len(text.encode())>2_000_000:raise PackageBlocked('Export file exceeds limit: '+name)
         if hashlib.sha256(text.encode()).hexdigest()!=handoff['sha256'].get(name):raise PackageBlocked('Export checksum mismatch: '+name)
+    prompt=render_prompt(files)
+    if PROMPT_PATH in files and files[PROMPT_PATH]!=prompt:raise PackageBlocked('Coding-agent prompt differs from the approved package template')
+    files[PROMPT_PATH]=prompt
+    hashes=dict(handoff['sha256']);hashes[PROMPT_PATH]=hashlib.sha256(prompt.encode()).hexdigest()
     if sum(len(x.encode()) for x in files.values())>20_000_000:raise PackageBlocked('Export exceeds total limit')
-    manifest={'version':1,'task_id':task['task_id'],'session_id':session,'generation':task['generation'],'phase_revisions':{p['phase_key']:{'completed_at':p['completed_at'],'state':p['state']} for p in task['phases']},'sha256':handoff['sha256']}
+    manifest={'version':1,'task_id':task['task_id'],'session_id':session,'generation':task['generation'],'phase_revisions':{p['phase_key']:{'completed_at':p['completed_at'],'state':p['state']} for p in task['phases']},'sha256':hashes}
     if source is not None:manifest['source']=source
     identity=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest();manifest['package_id']=identity
     folder.mkdir(parents=True,exist_ok=True);destination=folder/(identity+'.zip')

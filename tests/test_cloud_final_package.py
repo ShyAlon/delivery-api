@@ -48,6 +48,8 @@ def test_cloud_package_actual_create_download_repeat_tenant_and_tamper(export_en
             assert manifest['source']['owner_id']==ws.scope.owner_id
             assert manifest['task_id']==tid and manifest['generation']==1
             assert 'spec/AGENTS.md' in z.namelist() and 'spec/validation.json' in z.namelist()
+            assert 'CODING_AGENT_PROMPT.md' in z.namelist()
+            assert 'spec/validation.json' in z.read('CODING_AGENT_PROMPT.md').decode()
             assert not any('checkpoint' in n or 'private' in n for n in z.namelist())
             for name,digest in manifest['sha256'].items():assert hashlib.sha256(z.read(name)).hexdigest()==digest
         repeat=client.post(f'/api/tasks/{tid}/packages',json={});assert repeat.status_code==200
