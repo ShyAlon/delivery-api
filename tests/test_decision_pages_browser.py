@@ -383,7 +383,13 @@ def test_architecture_technical_default_is_readable_nonblocking_and_change_optio
  slot=data['review']['stack_decisions']['slots'][0];slot['technical_choice']=framing;slot['brief']='SECRET INTERNAL INVESTIGATION BLOB'
  def route(r):
   path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
-  if path.endswith('/stack-decisions'):posts.append(r.request.post_data_json);r.fulfill(json={'status':'saved'});return
+  if path.endswith('/stack-decisions'):
+   posts.append(r.request.post_data_json)
+   data['review']['revision']='gate:saved'
+   for saved in posts[-1]['decisions']:
+    for slot in data['review']['stack_decisions']['slots']:
+     if slot['key']==saved['key']:slot['founder_decision']={'text':saved['text'],'reason':saved['reason'],'actor':'fixture','at':'t'}
+   r.fulfill(json={'status':'saved'});return
   if path.endswith('/review'):r.fulfill(json=data);return
   if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
   if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
@@ -401,9 +407,10 @@ def test_architecture_technical_default_is_readable_nonblocking_and_change_optio
  p.screenshot(path=str(root/'technical-default-mobile.png'),full_page=True)
  panel.locator('.stack-change summary').click();panel.get_by_role('button',name='A Shared Store',exact=True).click()
  panel.get_by_role('button',name='Save Change',exact=True).click()
- expect(panel.locator('#stack-status')).to_contain_text('Change Saved')
+ expect(p.locator('#gate-decision-status')).to_contain_text('Change saved. Review the updated architecture')
  assert posts==[{'revision':'a'*64,'decisions':[{'key':'database_engine','text':'PostgreSQL','reason':''}]}]
- expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(p.locator('[data-action=approve]')).to_be_enabled()
+ assert 'gate%3Asaved' in p.url
 
 def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p,base,root=page
@@ -492,11 +499,17 @@ def test_gate_render_failure_stays_explained_after_checklist_refresh(page):
  p.screenshot(path=str(SCREENSHOTS/'gate-evidence-blocker-mobile.png'),full_page=True)
 
 
-def test_saved_stack_choice_checklist_explains_stale_evidence(page):
+def test_saved_stack_choice_refreshes_revision_and_remaining_blockers(page):
  p,base,root=page;data=_stack_review();posts=[]
  def route(r):
   path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
-  if path.endswith('/stack-decisions'):posts.append(r.request.post_data_json);r.fulfill(json={'status':'saved'});return
+  if path.endswith('/stack-decisions'):
+   posts.append(r.request.post_data_json)
+   data['review']['revision']='gate:saved'
+   for saved in posts[-1]['decisions']:
+    for slot in data['review']['stack_decisions']['slots']:
+     if slot['key']==saved['key']:slot['founder_decision']={'text':saved['text'],'reason':saved['reason'],'actor':'fixture','at':'t'}
+   r.fulfill(json={'status':'saved'});return
   if path.endswith('/review'):r.fulfill(json=data);return
   if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
   if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
@@ -506,8 +519,9 @@ def test_saved_stack_choice_checklist_explains_stale_evidence(page):
  panel.locator('.stack-change summary').first.click()
  panel.locator('textarea[name=stack-text-0]').fill('SQLite')
  panel.locator('.stack-save').first.click()
- expect(panel.locator('#stack-status')).to_contain_text('Change Saved')
- expect(p.locator('#decision-checklist')).to_contain_text('Your saved change updated the evidence')
+ expect(p.locator('#gate-decision-status')).to_contain_text('Change saved. Review the updated architecture')
+ expect(p.locator('#decision-checklist')).to_contain_text('1 architecture decision still open')
+ assert 'gate%3Asaved' in p.url
  expect(p.locator('[data-action=approve]')).to_be_disabled()
  assert len(posts)==1
 
