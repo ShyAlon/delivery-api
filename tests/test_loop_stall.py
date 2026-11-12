@@ -32,6 +32,12 @@ def test_watchdog_names_the_function_that_blocked_the_loop():
     assert late >= 300 and 'blocking_work_inside_the_loop' in stack, seen
 
 
+def test_stop_waits_until_the_watchdog_thread_has_exited():
+    dog = StallWatchdog(lambda late, stack: None, threading.get_ident(), poll_s=0.1).start()
+    dog.stop()
+    assert not dog._thread.is_alive()
+
+
 def test_a_responsive_loop_reports_nothing():
     seen = []
 

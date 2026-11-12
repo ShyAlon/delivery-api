@@ -29,6 +29,10 @@ class StallWatchdog:
 
     def stop(self):
         self._stop.set()
+        # Wake-and-join owns shutdown; merely setting the flag leaves the
+        # sampler alive after monitor cancellation (and races the next test).
+        if self._thread.is_alive() and threading.current_thread() is not self._thread:
+            self._thread.join(timeout=1)
 
     def beat(self):
         self._beat = time.monotonic()

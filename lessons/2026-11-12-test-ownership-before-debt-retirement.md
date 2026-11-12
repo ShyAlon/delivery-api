@@ -17,3 +17,9 @@ wait for the actual route. On failed send, restore the original question's
 visibility only if the submitting render still owns the page. Pixels can still
 show stale progress even after the composer assertions pass; keep that separate
 remaining defect visible instead of calling the whole UI done.
+
+Final source-enabled fast coverage also exposed two ownership assumptions. The
+network guard must launch this run's installed interpreter, not demand a second
+sibling virtualenv. Watchdog stop must join the sampler it owns, not just set a
+flag and race the next assertion. The immediate thread-exit test failed before
+the fix. Shutdown is bounded and never joins itself.
