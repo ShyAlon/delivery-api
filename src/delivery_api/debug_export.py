@@ -95,12 +95,45 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
     except ValueError:rows.append({'unparsed':line})
    add(name,rows,'owned PG document')
   else:add(name,text,'owned PG document')
+  return raw
  for phase_dir in ('interview','spec'):
   for name in ('run.log','llm-calls.jsonl','debug-http.jsonl','usage.jsonl'):
    read(root/phase_dir/name,f'{phase_dir}/{name}')
  # Per-turn question verification scores (interview-engine E5): written by the
  # interview phase only, one JSON object per probing turn, for calibration.
  read(root/'interview'/'verification.jsonl','interview/verification.jsonl')
+ # Exact current generator inputs, not a stale founder-register event snapshot.
+ for name in ('intent_model.json','conops.json'):
+  read(root/'interview'/name,'interview/'+name)
+ # Current isolated workers keep the private LLM sink at session root; older
+ # runtimes used spec/. Only these known rejection directories are readable.
+ # A manifest is data, never authority to select an arbitrary document/path.
+ remaining=8
+ for area in ('rejected-llm-outputs','spec/rejected-llm-outputs'):
+  manifest_key=area+'/manifest.jsonl'
+  raw=read(root/manifest_key,manifest_key)
+  if raw is None:continue
+  rows=[]
+  for line in raw.decode(errors='replace').splitlines():
+   try:row=json.loads(line)
+   except ValueError:continue
+   if not isinstance(row,dict):continue
+   path=row.get('path')
+   if not isinstance(path,str):
+    omissions.append({'source':manifest_key,'reason':'invalid rejection output key'});continue
+   candidate=Path(path)
+   expected_parent=root/area if candidate.is_absolute() else Path(area)
+   # No resolve/open/stat: the path is mapped to an owned PG document key.
+   # Disallow traversal, nested keys, other directories and non-raw files.
+   if (candidate.parent!=expected_parent or '..' in candidate.parts
+       or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,191}\.raw\.txt',candidate.name)):
+    omissions.append({'source':manifest_key,'reason':'invalid rejection output key'});continue
+   key=area+'/'+candidate.name
+   if key not in rows:rows.append(key)
+  if len(rows)>remaining:omissions.append({'source':manifest_key,'reason':'older rejection outputs omitted; latest 8 only'})
+  selected=rows[-remaining:] if remaining else []
+  for key in selected:read(root/key,key)
+  remaining-=len(selected)
  # Server run.log and the engine process log are global. Filter each by exact
  # task/session to avoid another task's project data; export a truthful
  # bounded tail with its capture scope. Delivery activity lines quote the ids
@@ -128,7 +161,8 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
  manifest={'export_version':1,'task_id':task_id,'session_id':session_id,'generation':generation,
   'created_at':datetime.now(timezone.utc).isoformat(),'included':list(files),'omissions':omissions,
   'browser_capture':{'started_at':browser.get('started_at'),'ended_at':browser.get('ended_at'),'scope':'current browser tab since capture started; not historical browser recovery'},
-  'limits':{'per_source_bytes':limit,'total_bytes':total_limit,'server_log':'last 2 MB filtered to exact task/session'},
+  'limits':{'per_source_bytes':limit,'total_bytes':total_limit,'server_log':'last 2 MB filtered to exact task/session','rejected_outputs':8},
+  'rejection_evidence':{'scope':'retained rejected output and reason; credential-redacted, not byte-exact export','inputs':'current intent/CONOPS at export time, not a historical failure-time snapshot'},
   'privacy':'Credentials are redacted. Project content can remain; downloading does not share or upload this ZIP.'}
  add('manifest.json',manifest,'manifest')
  data=io.BytesIO()
