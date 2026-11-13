@@ -287,7 +287,11 @@ class ProcessRunner:
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
                 self.store.add_event(task_id, "complete", "Engine process completed", phase_key=phase)
             else:
-                if stalled:
+                if getattr(proc,'failure_message',None):
+                    error=proc.failure_message
+                    cause=error
+                    next_step='Review the task diagnostics before retrying.'
+                elif stalled:
                     error=(f"Error: the engine produced no output for {stall_timeout:g} seconds, so the run was stopped. Likely cause: "
                            f"the process blocked silently - waiting on input that will never arrive, or a hung call with no heartbeat. "
                            f"Next: check run.log for the last reported stage, fix the cause, then retry.")

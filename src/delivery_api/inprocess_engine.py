@@ -152,7 +152,24 @@ class ChildPhaseLifecycle:
                 with bound(task_id=task_id,job_id=job_id):
                     claimed=await self._worker(store,proc).execute(job_id,self._produce(proc))
             except BaseException as exc:
-                failure=exc;proc.kill()
+                failure=exc
+                if isinstance(exc,(asyncio.CancelledError,EngineStopped)):proc.kill()
+                else:
+                    # Cleanup is not evidence of SIGKILL. The real child's
+                    # observed exit/cause belongs to the failure, not the
+                    # virtual pipe used by the runner.
+                    from .child_supervisor import ChildRunError
+                    child_error=exc if isinstance(exc,ChildRunError) else None
+                    shape=(child_error.child_failure or {}) if child_error else {}
+                    classes={shape.get('error_class'),*(shape.get('cause_classes') or [])}
+                    if 'ModelStructureError' in classes:
+                        message='The generated output did not satisfy the required structure. The final rejected item details are not available in this view. Review the task diagnostics before retrying; retrying may cost credits.'
+                    else:
+                        message='The generation worker failed before completing. Its exact cause is not available in this view. Open the task diagnostics before retrying; retrying may cost credits.'
+                    proc.failure_message='Error: '+message
+                    proc.feed((proc.failure_message+'\n').encode())
+                    observed=child_error.observed_returncode if child_error else None
+                    proc.finish(observed if type(observed) is int and observed!=0 else 1)
             try:
                 if proc.started.is_set():
                     try:await phase_task

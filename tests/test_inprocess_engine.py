@@ -196,3 +196,35 @@ def test_without_a_configured_engine_nothing_is_taken():
     try:
         ie.configure(None);assert ie.current() is None
     finally:ie.configure(saved)
+
+
+@pytest.mark.parametrize('shape',[None,{'error_class':'UserFacingError','cause_classes':['ModelStructureError']}])
+def test_producer_failure_is_not_fabricated_sigkill(monkeypatch,shape):
+    from delivery_api.child_supervisor import ChildRunError
+    async def go():
+        engine=ie.ChildPhaseLifecycle(Path('/unused'),gateway_factory=None)
+        error=ChildRunError('shape-only diagnostic, no raw payload')
+        error.child_failure=shape
+        error.observed_returncode=1
+        class Worker:
+            async def execute(self,job,producer):
+                proc=ie.take('failed-task');proc.started.set()
+                await asyncio.sleep(0)
+                raise error
+        engine._worker=lambda *a:Worker()
+        engine._produce=lambda *a:None
+        observed={}
+        class Orchestrator:
+            async def execute_phase(self,*a,**k):
+                proc=ie.take('failed-task')
+                observed['output']=(await read_all(proc)).decode()
+                observed['code']=await proc.wait()
+        with pytest.raises(ChildRunError) as raised:
+            await engine.dispatch(None,Orchestrator(),'failed-task','architecture','job',{})
+        assert raised.value is error
+        assert observed['code']==1
+        assert 'shape-only' not in observed['output']
+        assert 'Error:' in observed['output']
+        if shape:assert 'required structure' in observed['output']
+        else:assert 'exact cause is not available' in observed['output']
+    run(go())
