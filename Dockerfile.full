@@ -9,11 +9,11 @@ COPY delivery-api/ delivery-api/
 COPY interview-engine/ interview-engine/
 COPY spec-generator/ spec-generator/
 COPY verification-loop/ verification-loop/
-RUN --mount=type=cache,target=/root/.cache/pip echo "bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e  delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl" | sha256sum --check - \
+RUN --mount=type=cache,target=/root/.cache/pip echo "ebebe112cf59418239a831d122c6e4634d6f4ad79e01f4255b72e3cb73673942  delivery-api/vendor/vmodel_contracts-0.29.0-py3-none-any.whl" | sha256sum --check - \
     && echo "ab670b145804e5571cf98e784a49115ae86993ae3e56a91b4e967f5f9b75efb9  delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl" | sha256sum --check - \
     && cmp delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl interview-engine/vendor/requi_child_contract-0.3.0-py3-none-any.whl \
     && pip wheel --no-deps --wheel-dir /wheels ./delivery-api ./interview-engine ./spec-generator ./verification-loop \
-    && cp delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl /wheels/ \
+    && cp delivery-api/vendor/vmodel_contracts-0.29.0-py3-none-any.whl delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl /wheels/ \
     && python delivery-api/scripts/docker/wheel_deps.py /wheels > /wheels/requirements.txt
 
 FROM python:3.12-slim
@@ -24,8 +24,8 @@ ENV PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
     REQUI_STARTUP_EVIDENCE=/data/requi-startup.json
 WORKDIR /app
 COPY --from=build /wheels/requirements.txt /wheels/requirements.txt
-# Packages are installed without dependency resolution, as scripts/build-dist.sh does: verification-loop pins an old
-# vmodel-contracts commit by git URL (no git, private repo). vmodel-contracts comes from the vendored wheel instead.
+# Internal packages share the exact vendored contracts wheel. Resolve third-party requirements
+# from their metadata, then install internal wheels without fetching private git dependencies.
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r /wheels/requirements.txt 'psycopg[binary]>=3.2,<4' fastapi uvicorn pydantic httpx python-multipart \
       langgraph langchain-core langchain-openai langchain-ollama python-dotenv 'typesafe-sdk==0.7.0' 'pyarrow>=17,<24'
 

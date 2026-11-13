@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-      - run: python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+      - run: python -m pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
       - name: Enforce zero UI component exceptions
         run: python scripts/ci/check-ui-boundaries.py
       - name: Enforce prose-free interview control path
@@ -66,7 +66,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-      - run: python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+      - run: python -m pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
       - name: Enforce zero UI component exceptions
         run: python scripts/ci/check-ui-boundaries.py
       - run: DELIVERY_TEST_SCOPE=pr ./scripts/test-local.sh
@@ -85,7 +85,7 @@ jobs:
           python-version: "3.12"
       - name: Install real runtime and test packages
         run: |
-          python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+          python -m pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
           python -m pip install -e '.[dev]'
           sha256sum --check vendor/acceptance-producers.sha256
           python -m pip install vendor/interview_engine-0.1.0-py3-none-any.whl vendor/spec_generator-0.1.0-py3-none-any.whl
@@ -108,7 +108,7 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-      - run: python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+      - run: python -m pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
       - run: DELIVERY_TEST_SCOPE=cosmetic ./scripts/test-local.sh
 
   control-plane-wheel:
@@ -123,7 +123,7 @@ jobs:
       - name: Clean delivery-only install and dry startup
         run: |
           python -m venv /tmp/control-plane-runtime
-          /tmp/control-plane-runtime/bin/pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl /tmp/control-plane-wheels/*.whl 'psycopg[binary]>=3.2,<4'
+          /tmp/control-plane-runtime/bin/pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl /tmp/control-plane-wheels/*.whl 'psycopg[binary]>=3.2,<4'
           /tmp/control-plane-runtime/bin/pip check
           cd /tmp
           python "$GITHUB_WORKSPACE/scripts/docker/owned-pg-smoke.py" "$GITHUB_WORKSPACE" /tmp/control-plane-runtime/bin/python "$GITHUB_WORKSPACE/scripts/docker/control-plane-smoke.py"
