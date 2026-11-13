@@ -59,7 +59,9 @@ def engine_timing_stage(line:str):
 
 
 
-class ChildRunError(RuntimeError):pass
+class ChildRunError(RuntimeError):
+    observed_returncode: int | None = None
+    child_failure: dict | None = None
 
 
 class _ChildHandle:
@@ -337,6 +339,10 @@ class ChildSupervisor:
                 import sys
                 print(detail,file=sys.stderr,flush=True)
                 if isinstance(failure_error,ChildRunError):
+                    # Typed, shape-only cause for the phase UI. Never parse or
+                    # forward arbitrary exception values or child stderr.
+                    failure_error.observed_returncode=code
+                    failure_error.child_failure=handle.child_error
                     failure_error.args=(str(failure_error)+'; '+detail,)
             self.active=False
         if handle.timing_error is not None:raise ChildRunError('engine timing persistence failed') from handle.timing_error
