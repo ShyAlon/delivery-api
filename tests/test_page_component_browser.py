@@ -16,8 +16,8 @@ def test_page_frame_and_legacy_lifecycle_share_one_owner(tmp_path):
         expect(page.locator('header')).to_have_count(1);expect(page.locator('main')).to_have_count(1);expect(page.locator('footer')).to_have_count(1)
         expect(page.locator('.page-head h2')).to_have_text('Evidence')
         assert page.evaluate('exits===1 && controller.signal.aborted && stale && Page.epoch===at+1')
-        assert page.locator('[id^=ui-page-]').count()==2
-        page.evaluate('Page.installStyles()');assert page.locator('[id^=ui-page-]').count()==2
+        assert set(page.locator('[id^=ui-page-]').evaluate_all('(nodes)=>nodes.map(n=>n.id)'))=={'ui-page-style.css','ui-page-chrome.css','ui-page-flow'}
+        page.evaluate('Page.installStyles()');assert set(page.locator('[id^=ui-page-]').evaluate_all('(nodes)=>nodes.map(n=>n.id)'))=={'ui-page-style.css','ui-page-chrome.css','ui-page-flow'}
         page.get_by_role('button',name='Continue').scroll_into_view_if_needed();expect(page.get_by_role('button',name='Continue')).to_be_in_viewport()
         browser.close()
 

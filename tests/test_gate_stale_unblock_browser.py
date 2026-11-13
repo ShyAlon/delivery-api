@@ -43,8 +43,6 @@ def test_stale_semantic_gate_reopen_current_path(pg_browser,width,height):
  jump=p.locator('#decision-checklist [data-jump="#semantic-panel"]');jump.click()
  expect(p.locator('#semantic-panel')).to_be_in_viewport()
  p.locator('#semantic-panel input[value=accept]').check()
- p.get_by_role('button',name='Other actions',exact=True).click()
- p.get_by_text('Add comment',exact=True).click()
  p.locator('[name=comment]').fill('Keep this unsaved note')
  p.locator('#apply-semantic').click()
  expect(p.locator('[name=comment]')).to_have_value('Keep this unsaved note')
@@ -99,7 +97,7 @@ def test_real_pg_saved_semantic_choices_auto_refresh_authoritative_revision(pg_b
 def test_failed_semantic_save_preserves_choices_and_does_not_refresh(pg_browser):
  p,base,w,state,old=_semantic_fixture(pg_browser);state['failure']=True
  p.goto(base+'/tasks/t1/gates/gate-srs');expect(p.locator('#apply-semantic')).to_be_visible();old_url=p.url
- p.locator('#semantic-panel input[value=accept]').check();p.get_by_role('button',name='Other actions',exact=True).click();p.get_by_text('Add comment',exact=True).click();p.locator('[name=comment]').fill('Unsaved note')
+ p.locator('#semantic-panel input[value=accept]').check();p.locator('[name=comment]').fill('Unsaved note')
  p.locator('#apply-semantic').click()
  expect(p.locator('#semantic-status')).to_contain_text('item decision rejected')
  expect(p.locator('#apply-semantic')).to_be_enabled()
@@ -121,7 +119,7 @@ def test_late_semantic_save_never_navigates_back_over_new_page(pg_browser):
 
 def test_external_evidence_change_keeps_unsaved_text_and_offers_current_gate(pg_browser):
  p,base,w,state,old=_semantic_fixture(pg_browser)
- p.goto(base+'/tasks/t1/gates/gate-srs');p.get_by_role('button',name='Other actions',exact=True).click();p.get_by_text('Add comment',exact=True).click();p.locator('[name=comment]').fill('Unsaved note')
+ p.goto(base+'/tasks/t1/gates/gate-srs');p.locator('[name=comment]').fill('Unsaved note')
  state['current']['review']['revision']='gate:external'
  p.wait_for_timeout(5500)
  expect(p.locator('[data-action=approve]')).to_be_disabled()
