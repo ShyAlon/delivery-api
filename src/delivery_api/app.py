@@ -2346,7 +2346,7 @@ async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=D
     _phase_jobs.add(runner_task);runner_task.add_done_callback(_phase_jobs.discard)
     return {"status":"started","phase":phase,"job_id":job_id}
 
-async def _run_next_phase(task_id:str,phase:str,label:str,job_id:str)->None:
+async def _run_next_phase(task_id:str,phase:str,label:str,job_id:str,*,source:str="first_start")->None:
     try:
         from .tenant_jobs import dispatch_phase
         await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=job_id)
@@ -2354,7 +2354,7 @@ async def _run_next_phase(task_id:str,phase:str,label:str,job_id:str)->None:
         from .user_messages import scrub_failure_text
         message=scrub_failure_text(f"{label} stopped: {type(exc).__name__}: {exc}")
         store.update_phase(task_id,phase,"failed",detail=message)
-        store.add_event(task_id,"error",message,phase_key=phase,payload={"cause":message,"first_start":True})
+        store.add_event(task_id,"error",message,phase_key=phase,payload={"cause":message,source:True})
         activity("phase.start.failed",f"{label} did not run",task_id=task_id,error=f"{type(exc).__name__}: {str(exc)[:300]}")
 
 class RerunRequest(BaseModel):
@@ -2832,8 +2832,13 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
     # dispatch. No transaction or task lock spans a provider/network await.
     gate,job_id,phase,selected=_decide_gate_sync(task_id,gate_key,req,a)
     if job_id:
-        from .tenant_jobs import dispatch_phase
-        await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=job_id)
+        # The transaction above already committed the reviewed gate and exact
+        # job. dispatch_phase runs the whole generator lifecycle, not just its
+        # acceptance. Use the shared owned phase runner so HTTP acknowledges
+        # the save now and failures remain visible in task progress.
+        from .phases import PHASE_BY_KEY
+        runner_task=spawn(_run_next_phase(task_id,phase,PHASE_BY_KEY[phase].label,job_id,source="gate_decision"))
+        _phase_jobs.add(runner_task);runner_task.add_done_callback(_phase_jobs.discard)
     return gate
 
 class FeedbackWrite(BaseModel):
