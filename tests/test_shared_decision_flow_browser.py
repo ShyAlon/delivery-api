@@ -2,7 +2,7 @@ import pytest
 from delivery_api.tenancy import tenant_context
 
 @pytest.mark.parametrize('width,height',[(1475,780),(390,844)])
-def test_gate_actions_visible_secondary_fields_closed_and_status_uncovered(pg_browser,width,height):
+def test_gate_top_actions_and_fields_visible_and_status_uncovered(pg_browser,width,height):
  from playwright.sync_api import expect
  page,base,w=pg_browser
  with tenant_context(w.scope):
@@ -10,12 +10,12 @@ def test_gate_actions_visible_secondary_fields_closed_and_status_uncovered(pg_br
  page.set_viewport_size({'width':width,'height':height});page.goto(base+'/tasks/'+tid+'/gates/gate-needs')
  expect(page.locator('.shared-action-strip')).to_be_visible()
  approve=page.locator('[data-action=approve]');box=approve.bounding_box();assert box['y']>=0 and box['y']+box['height']<=height
- expect(page.locator('[name=edited_text]')).not_to_be_visible();expect(page.locator('[name=steer]')).not_to_be_visible();expect(page.locator('[name=comment]')).not_to_be_visible()
- expect(page.locator('.shared-decision-summary')).to_contain_text('Your decision is needed')
+ expect(page.locator('[name=edited_text]')).to_be_visible();expect(page.locator('[name=steer]')).to_be_visible();expect(page.locator('[name=comment]')).to_be_visible()
+ expect(page.locator('.shared-decision-summary')).to_have_count(0)
  assert page.locator('header').evaluate('e=>getComputedStyle(e).position')=='relative'
  assert page.locator('.gate-controls').evaluate('e=>getComputedStyle(e).overflowY')=='visible'
- page.get_by_role('button',name='Other actions',exact=True).click();page.locator('.decision-secondary summary').first.click();expect(page.locator('[name=edited_text]')).to_be_visible()
- page.locator('[name=edited_text]').fill('Preserved draft');page.locator('.decision-secondary summary').first.click()
+ expect(page.locator('[data-action=edit]')).to_be_in_viewport();expect(page.locator('[data-action=redo]')).to_be_in_viewport()
+ page.locator('[name=edited_text]').fill('Preserved draft')
  assert page.locator('[name=edited_text]').input_value()=='Preserved draft'
  page.evaluate("document.querySelector('#gate-decision-status').textContent='Saving decision and starting the next step';window.scrollTo(0,0)")
  status=page.locator('#gate-decision-status').bounding_box();assert status['y']>=0 and status['y']+status['height']<=height
@@ -42,16 +42,12 @@ def test_ready_gate_keyboard_pending_failure_and_reserved_space(pg_browser,width
  button=p.locator('[data-action=approve]');expect(button).to_be_enabled()
  expect(p.locator('.gate-status')).to_have_text('Your decision is needed')
  expect(p.locator('.gate-status')).to_have_class(__import__('re').compile(r'\binfo\b'))
- expect(p.locator('.decision-other-actions')).not_to_have_attribute('open','')
+ expect(p.locator('.decision-other-actions')).to_have_count(0)
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  strip=p.locator('.shared-action-strip')
- if height>500:
-  expect(button).to_be_in_viewport();assert strip.evaluate('e=>getComputedStyle(e).position')=='fixed'
-  p.evaluate('window.scrollTo(0,document.body.scrollHeight)')
-  assert p.locator('main').evaluate('e=>parseFloat(getComputedStyle(e).paddingBottom)')>=strip.bounding_box()['height']
- else:
-  # Approved short/zoom fallback: actions are part of the one document scroll.
-  assert strip.evaluate('e=>getComputedStyle(e).position')=='static'
+ expect(button).to_be_in_viewport();assert strip.evaluate('e=>getComputedStyle(e).position')=='fixed'
+ p.evaluate('window.scrollTo(0,document.body.scrollHeight)')
+ assert p.locator('body').evaluate('e=>parseFloat(getComputedStyle(e).paddingTop)')>=strip.bounding_box()['height']
  button.focus();p.keyboard.press('Enter')
  status=p.locator('#gate-decision-status');expect(status).to_contain_text('Saving decision and starting the next step')
  expect(button).to_be_disabled();expect(status).to_be_in_viewport()
@@ -63,9 +59,7 @@ def test_ready_gate_keyboard_pending_failure_and_reserved_space(pg_browser,width
  expect(status).to_contain_text('Fixture failure');expect(button).to_be_enabled()
  expect(status.locator('.notice')).not_to_have_class(__import__('re').compile(r'\binfo\b'))
  p.screenshot(path=f'/tmp/shared-ready-error-{width}.png')
- p.get_by_role('button',name='Other actions',exact=True).focus();p.keyboard.press('Enter')
- expect(p.locator('.decision-other-actions')).to_have_attribute('open','')
- p.locator('.decision-secondary summary').first.focus();p.keyboard.press('Enter')
+ expect(p.locator('[data-action=edit]')).to_be_in_viewport()
  expect(p.locator('[name=edited_text]')).to_be_visible()
  p.locator('[name=edited_text]').fill('Reviewed wording')
  # Browser history restores a current deep link, with one strip, not a second clone.
@@ -87,7 +81,7 @@ def test_task_current_decision_inherits_visible_action_strip(pg_browser):
   p.set_viewport_size({'width':width,'height':844});p.goto(base+'/tasks/'+tid+'/view')
   expect(p.locator('.shared-action-strip .decision-launch')).to_be_visible()
   expect(p.locator('.shared-action-strip .decision-launch')).to_be_in_viewport()
-  expect(p.locator('.shared-decision-summary')).to_have_count(1)
+  expect(p.locator('.shared-decision-summary')).to_have_count(0)
   p.screenshot(path=f'/tmp/shared-task-current-{width}.png')
 
 

@@ -6,31 +6,34 @@ const flowStyles=`
 /* One document scroll. Headings and navigation never stack as sticky layers. */
 html,body{height:auto!important;min-height:100%;overflow-y:visible!important}
 header,.page-head,.detail-head,.compact-head,.operator-tabs,.private-workspace .tabs,.preview-banner{position:relative!important;top:auto!important}
-main.has-shared-actions{padding-bottom:calc(var(--shared-action-reserve,0px) + 28px)!important}
+body.has-shared-actions{padding-top:var(--shared-action-reserve,0px)}
 body.ops-page #app,body.ops-page #frame{height:auto!important;min-height:0;flex:none!important}
 body.ops-page #panels{grid-template-rows:auto auto!important;flex:none!important}
 body.ops-page .panel,body.ops-page .scroll,.private-workspace .scroll,.private-workspace .force-plan{height:auto!important;max-height:none!important;overflow-y:visible!important}
-#semanticform .shared-action-strip.readonly,#semanticform .shared-action-strip.historical-review,.shared-action-strip.readonly,.shared-action-strip.historical-review{position:static;box-shadow:none}
 
-.gate-controls{position:static!important;max-height:none!important;overflow:visible!important;margin-top:24px}
+/* Shared decision geometry: one flex row, one document scroll, one action row. */
+.gate-page-grid,#semanticform{display:flex;align-items:flex-start;gap:24px}
+.gate-page-grid>.gate-evidence,#semanticform>.semantic-evidence{flex:1 1 0;min-width:0}
+.gate-page-grid>.gate-controls,#semanticform>.semantic-controls{flex:0 1 420px;min-width:350px;margin:0;position:static;max-height:none;overflow:visible}
 .decision-options,.decision-body,.gate-evidence,.gate-artifact,.gate-structured,.context-body,.qa-history,.qa-items,.live-console,.console,.artifact-readable,.json-view,.feedback-context,.decision-scroll,.artifact-content,#node-detail{max-height:none!important;height:auto!important;overflow-y:visible!important}
-#semanticform.applying .shared-action-strip,#semanticform .shared-action-strip,.shared-action-strip{position:fixed;left:0;right:0;bottom:0;z-index:7;padding:10px max(20px,4.5vw) calc(10px + env(safe-area-inset-bottom));background:var(--card,#f5f5ee);border-top:1px solid var(--line,#d7ddd4);box-shadow:0 -5px 20px #17211d12;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
-#semanticform .shared-action-strip #semanticstatus{flex:0 0 auto}
-.shared-action-strip .gate-page-actions,.shared-action-strip>.actions{display:flex!important;gap:10px;margin:0!important;flex:1;align-items:center}
-.shared-action-strip .gate-page-actions .primary,.shared-action-strip>.actions .primary{order:-1;flex:1}
+.shared-action-strip{position:fixed;top:0;left:0;right:0;bottom:auto;z-index:20;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding:12px max(20px,4.5vw);background:var(--card,#f5f5ee);border-bottom:1px solid var(--line);box-shadow:0 4px 16px #17211d12}
+.shared-action-strip .gate-page-actions,.shared-action-strip>.actions{display:flex;flex-wrap:wrap;gap:10px;margin:0;flex:1}
+.shared-action-strip button{min-height:44px}
+.shared-action-strip .primary{order:-1}
+.shared-action-strip .gate-page-actions>button{flex:1 1 100px}
 .shared-action-strip .decision-checklist{margin:0;padding:6px 10px;flex:1;min-width:200px}
 .shared-action-strip [aria-live]{margin:0;max-width:100%;overflow-wrap:anywhere}
-.shared-action-strip .decision-launch{position:static!important;margin:0;padding:8px 16px;min-height:46px;width:auto;flex:1}
+.shared-action-strip .decision-launch{position:static;margin:0;flex:1;min-height:46px}
 .shared-action-strip .decision-launch small,.shared-action-strip .decision-launch em{display:none}
-.shared-decision-summary{padding:12px 16px;margin:10px 0;border:1px solid var(--line);background:var(--card);border-radius:12px}
-.decision-secondary{margin:12px 0;border:1px solid var(--line);border-radius:12px;padding:12px 16px}.decision-secondary>summary{cursor:pointer;font-weight:600}
-.decision-secondary label{display:block;margin-top:12px}
+.shared-action-strip.readonly,.shared-action-strip.historical-review{position:static;width:100%;padding:0;margin:0 0 20px;border:0;box-shadow:none;background:transparent;display:block}
+.shared-action-strip.historical-review .gate-page-actions,.shared-action-strip.historical-review>.actions{display:none}
+.shared-decision-summary{display:none}
+@media(max-width:850px){.shared-action-strip .gate-page-actions,.shared-action-strip>.actions{flex-basis:100%;width:100%}.gate-page-grid,#semanticform{flex-direction:column;gap:20px}.gate-page-grid>.gate-controls,#semanticform>.semantic-controls{flex:none;min-width:0;width:100%}.shared-action-strip{padding:8px 16px;gap:6px}.shared-action-strip .decision-checklist{font-size:12px}.shared-action-strip button{padding:8px 12px}}
 .notice.info,.gate-status.info{background:var(--card,#f5f5ee)!important;border:1px solid var(--line,#d7ddd4)!important;color:var(--muted,#52645a)!important;border-radius:12px;padding:12px 16px}
 .gate-status.info{font:inherit;box-shadow:none!important;animation:none!important}
 footer:has(.operation-status){position:static!important}
 footer>.operation-status{position:static!important;max-width:100%;background:var(--card);padding:10px 14px;border:1px solid var(--line);border-radius:10px}
-@media(max-width:700px){.shared-action-strip{gap:6px;padding:8px 16px calc(8px + env(safe-area-inset-bottom))}.shared-action-strip .gate-page-actions,.shared-action-strip>.actions{width:100%;flex-basis:100%}.shared-action-strip .decision-checklist{font-size:12px;padding:3px 8px}.shared-action-strip button{min-height:44px}.shared-action-strip .decision-launch{font-size:12px}footer>.operation-status{font-size:12px}}
-@media(max-height:500px){#semanticform.applying .shared-action-strip,#semanticform .shared-action-strip,.shared-action-strip{position:static;box-shadow:none;padding:10px;margin-top:16px}main{padding-bottom:30px}}
+
 `;
 let flowWired=false;
 function wirePageFlow(){
@@ -39,9 +42,9 @@ function wirePageFlow(){
  const reserve=()=>{
   const main=document.querySelector('main');if(!main)return;
   const strips=[...main.querySelectorAll('.shared-action-strip')].filter(s=>getComputedStyle(s).position==='fixed'&&s.getClientRects().length);
-  main.classList.toggle('has-shared-actions',strips.length>0);
+  document.body.classList.toggle('has-shared-actions',strips.length>0);
   const height=Math.max(0,...strips.map(s=>s.getBoundingClientRect().height));
-  main.style.setProperty('--shared-action-reserve',height+'px');
+  document.body.style.setProperty('--shared-action-reserve',height+'px');
  };
  const sizes=new ResizeObserver(reserve);addEventListener('resize',reserve);
  const refresh=()=>{
@@ -50,14 +53,14 @@ function wirePageFlow(){
    const text=note.textContent.trim();
    if(/^(Your session cost and credits left stay in the top bar while it runs\.|Closed gates are real pauses\.|Historical gate review - read-only\.|Historical decision review - read-only\.|Current gate review - not waiting for a decision\.|No artifacts are available yet\.|No saved artifacts are available for this task\.|Gate decision saved\. Starting |Saved artifacts remain available below\.)/.test(text))note.classList.add('info');
   }
-  for(const footer of main.querySelectorAll('.semantic-footer:not(.shared-action-strip)'))footer.classList.add('shared-action-strip');
+  for(const footer of main.querySelectorAll('.semantic-footer:not(.shared-action-strip)')){footer.classList.add('shared-action-strip');const parent=footer.closest('.semantic-controls')||footer.parentElement;parent.prepend(footer)}
   for(const form of main.querySelectorAll('form:not(#gateform)')){
    const primary=form.querySelector('button[type="submit"].primary');if(!primary||form.querySelector('.shared-action-strip'))continue;
    if(!form.closest('.decision-page'))continue;
    const strip=document.createElement('div');strip.className='shared-action-strip';strip.setAttribute('aria-label','Current decision actions');
    const actions=primary.closest('.actions');if(actions)strip.append(actions);else strip.append(primary);
    for(const status of form.querySelectorAll('#review-status'))strip.append(status);
-   form.append(strip);
+   form.prepend(strip);
   }
   const actions=[...main.querySelectorAll('.decision-launch')].filter(x=>!x.closest('.shared-action-strip'));
   if(actions.length&&!main.querySelector('.gate-controls')){
@@ -68,9 +71,10 @@ function wirePageFlow(){
   // a current decision or pin those controls over current evidence.
   const historical=[...main.querySelectorAll('.notice')].some(n=>/^(Historical (?:gate |decision )?review - read-only\.|Current gate review - not waiting for a decision\.)/.test(n.textContent.trim()));
   for(const strip of main.querySelectorAll('.shared-action-strip'))strip.classList.toggle('historical-review',historical);
-  const waiting=main.querySelector('.shared-action-strip:not(.readonly):not(.historical-review)');let summary=main.querySelector('.shared-decision-summary');
-  if(waiting&&!summary){summary=document.createElement('div');summary.className='shared-decision-summary';summary.setAttribute('role','status');summary.textContent='Your decision is needed. Use the decision action below.';const heading=main.querySelector('.page-head');heading?heading.after(summary):main.prepend(summary)}
-  if(!waiting&&summary)summary.remove();
+  main.querySelector('.shared-decision-summary')?.remove();
+  for(const status of main.querySelectorAll('.gate-status.waiting')){
+   const text=historical?'Past review - read-only.':'Your decision is needed';if(status.textContent!==text)status.textContent=text;status.classList.add('info');
+  }
   for(const strip of main.querySelectorAll('.shared-action-strip'))if(!measured.has(strip)){measured.add(strip);sizes.observe(strip)}
   reserve();
  };

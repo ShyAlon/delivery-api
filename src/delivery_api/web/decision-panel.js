@@ -9,8 +9,11 @@ export function refreshDecision(root,blockers,{gated=['[data-action="approve"]',
  compactDecision(root);
  const box=root.querySelector('#decision-checklist');if(!box)return;
  box.classList.toggle('ready',!blockers.length);
- root.querySelector('.shared-action-strip')?.classList.toggle('readonly',blockers.some(b=>/past review.*read-only|not waiting for a decision/.test(b.text)));
+ const readonly=blockers.some(b=>/past review.*read-only|not waiting for a decision/.test(b.text));
+ root.dataset.decisionState=readonly?'readonly':'current';
+ root.querySelector('.shared-action-strip')?.classList.toggle('readonly',readonly);
  box.innerHTML=blockers.length?`<b>Before you can continue</b><ul>${blockers.map((b,i)=>`<li>${b.jump?`<button type="button" class="link-button" data-jump="${esc(b.jump)}" data-i="${i}">${esc(b.text)}</button>`:esc(b.text)}</li>`).join('')}</ul>`:'<b>Ready to continue.</b>';
+ if(readonly)box.innerHTML='<b>Past review - read-only.</b><p>Open the current review to make a decision.</p>';
  box.querySelectorAll('[data-jump]').forEach(a=>a.onclick=()=>{
   // The target can be in the evidence column, outside the controls form.
   // Keep lookup inside this decision page, not another modal/page instance.
@@ -33,25 +36,15 @@ export function refreshDecision(root,blockers,{gated=['[data-action="approve"]',
  for(const sel of gated)root.querySelectorAll(sel).forEach(b=>{b.disabled=root.getAttribute('aria-busy')==='true'||root.classList.contains('applied')||b.getAttribute('aria-busy')==='true'||blockers.length>0;b.setAttribute('aria-describedby','decision-checklist');if(blockers.length)b.title=blockers[0].text;else b.removeAttribute('title')});
 }
 
-/* Shared decision infrastructure moves the original controls, never clones them:
-   form data, handlers, disabled state and pending/error text keep one owner. */
+/* One shared action owner. Original buttons stay inside their original form.
+   No field wrapping, cloned controls, nested action drawers or hidden decisions. */
 export function compactDecision(root){
  if(root.dataset.compactDecision||!root.matches('.gate-controls'))return;
  root.dataset.compactDecision='true';
- const wrap=(name,title,extras=[])=>{const field=root.querySelector(`[name="${name}"]`),label=field?.closest('label');if(!label)return;
-  const detail=document.createElement('details');detail.className='decision-secondary';const summary=document.createElement('summary');summary.textContent=title;label.before(detail);detail.append(summary,label,...extras.filter(Boolean));return detail};
- const edit=root.querySelector('[data-action="edit"]'),redo=root.querySelector('[data-action="redo"]');
- wrap('edited_text','Edit decision',[edit,root.querySelector('#gate-save-draft')]);
- wrap('steer','Ask for changes',[redo]);
- wrap('comment','Add comment',[root.querySelector('#gate-save-comment'),root.querySelector('#gate-comments')]);
- const other=document.createElement('details');other.className='decision-other-actions';const otherTitle=document.createElement('summary');otherTitle.textContent='Other actions';other.append(otherTitle);root.querySelector('.decision-secondary')?.before(other);
- for(const node of root.querySelectorAll('.decision-secondary,.model-panel'))other.append(node);
- const status=root.querySelector('.gate-status');if(status?.classList.contains('waiting')){status.textContent='Your decision is needed';status.classList.add('info')}
- const strip=document.createElement('div');strip.className='shared-action-strip';strip.setAttribute('aria-label','Current decision actions');
- const actions=root.querySelector('.gate-page-actions');const more=document.createElement('button');more.type='button';more.className='secondary';more.textContent='Other actions';more.setAttribute('aria-expanded','false');other.addEventListener('toggle',()=>more.setAttribute('aria-expanded',String(other.open)));more.onclick=()=>{other.open=!other.open;more.setAttribute('aria-expanded',String(other.open));otherTitle.focus();other.scrollIntoView({block:'center'})};
- if(actions){actions.append(more);strip.append(actions)}
+ const strip=document.createElement('div');strip.className='shared-action-strip';strip.setAttribute('aria-label','Decision actions');
+ const actions=root.querySelector('.gate-page-actions');if(actions)strip.append(actions);
  for(const node of [root.querySelector('#decision-checklist'),root.querySelector('#gate-decision-status')])if(node)strip.append(node);
- root.append(strip);
+ root.prepend(strip);
  const title=root.querySelector('h2');if(title)title.textContent='Your decision';
  const intro=root.querySelector('.dialog-intro');if(intro)intro.hidden=true;
 }

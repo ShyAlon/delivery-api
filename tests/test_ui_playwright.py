@@ -3263,8 +3263,6 @@ def test_gate_pending_locks_all_controls_and_preserves_values(pg_page,pg_ui,pg_i
     mock_gate_review(page,ui,tid);held=[]
     page.route(f'**/api/tasks/{tid}/gates/*/decide',lambda r:held.append(r))
     page.goto(ui+f'/tasks/{tid}/gates/gate-intent')
-    page.get_by_role('button',name='Other actions',exact=True).click()
-    page.get_by_text('Add comment',exact=True).click()
     page.locator('[name=comment]').fill('Preserved review note')
     page.locator('[data-action=approve]').click()
     expect(page.locator('#gateform')).to_have_attribute('aria-busy','true')

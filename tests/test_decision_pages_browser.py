@@ -50,7 +50,7 @@ def test_choose_save_reload_continue_and_historical_back(page):
  p.screenshot(path=str(root/'concept-desktop.png'),full_page=True)
  p.get_by_role('button',name='Choose and continue').click();expect(p.locator('h1')).to_have_text('Review Before Continuing');assert 'wait-review' in p.url; expect(p.locator('.context-box .gate-structured').first).to_be_attached();expect(p.locator('.review-fact')).to_have_count(0); p.screenshot(path=str(root/'final-review.png'),full_page=True)
  assert state['posts'][0]['answer']=='2 - One deployment is enough';assert state['posts'][0]['comment']=='Check offline behavior'
- p.goto(link);expect(p.locator('.notice').first).to_contain_text('Historical review');expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ p.goto(link);expect(p.locator('.notice').first).to_contain_text('Historical review');expect(p.locator('button[type=submit].primary')).to_be_disabled();expect(p.locator('button[type=submit].primary')).not_to_be_visible()
  assert len(state['posts'])==1
 
 def test_mobile_comment_only_and_no_overflow(page):
@@ -64,7 +64,8 @@ def test_mobile_comment_only_and_no_overflow(page):
 def test_stale_live_precondition_disables_submission(page):
  p,base,root=page;state=fake(p);p.goto(base+'/tasks/concept/decisions/wait-concept');p.locator('input[value="1"]').check();p.locator('textarea[name=rationale]').fill('Native APIs needed');state['current']=review('other-wait')
  p.get_by_role('button',name='Choose and continue').click();expect(p.locator('#review-status')).to_contain_text('review changed')
- assert not state['posts'];expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ # A stale current decision stays visible, disabled with its reload reason.
+ assert not state['posts'];expect(p.locator('button[type=submit].primary')).to_be_disabled();expect(p.locator('button[type=submit].primary')).to_be_visible()
 
 def test_avatar_debug_dialog_download_and_default_is_not_debug(page):
  p,base,root=page;fake(p)
@@ -90,7 +91,7 @@ def test_accepted_decision_followup_failure_never_reenables_submit(page):
  # Recovery contract: the committed answer is never resubmitted; the page shows
  # the recovery status and keeps the submit disabled while it retries/navigates.
  expect(p.locator('#review-status')).to_contain_text('Decision saved')
- expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled();assert len(state['posts'])==1
+ expect(p.locator('button[type=submit].primary')).to_be_disabled();expect(p.locator('button[type=submit].primary')).to_be_visible();assert len(state['posts'])==1
 
 def test_semantic_findings_review_shows_choices_and_never_defaults(page):
  p,base,root=page;control=review();control['kind']='semantic_review';control['options']=[]
@@ -586,7 +587,7 @@ def test_gate_checklist_jump_reveals_collapsed_target_and_moves_focus(page):
 def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
  p,base,root=page;state=fake(p)
  p.goto(base+'/tasks/concept/decisions/wait-concept')
- expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ expect(p.locator('button[type=submit].primary')).to_be_disabled();expect(p.locator('button[type=submit].primary')).to_be_visible()
  expect(p.locator('#decision-checklist')).to_contain_text('Choose an operating concept')
  expect(p.locator('#decision-checklist')).to_contain_text('Explain why this concept fits')
  p.locator('#decision-checklist [data-jump=".decision-options"]').click()
@@ -596,7 +597,7 @@ def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
  p.locator('textarea[name=rationale]').fill('One deployment')
  expect(p.get_by_role('button',name='Choose and continue')).to_be_enabled()
  p.locator('textarea[name=rationale]').fill('')
- expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ expect(p.locator('button[type=submit].primary')).to_be_disabled();expect(p.locator('button[type=submit].primary')).to_be_visible()
  p.locator('#decision-checklist').scroll_into_view_if_needed()
  p.screenshot(path=str(SCREENSHOTS/'concept-checklist-desktop.png'))
  p.set_viewport_size({'width':390,'height':844})
