@@ -1971,7 +1971,11 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(pg_page,p
     assert page.locator('select[name="selected_option"]').count()==0  # 'Choose another option' recorded nothing, so the pills are gone
     assert page.locator('input[name="selected_option"]').input_value().startswith('Approve ')
     page.set_viewport_size({'width':1249,'height':900});page.screenshot(path=str(_screenshots_dir / 'decision-panel-closed.png'))
-    page.locator('.model-panel summary').click();page.locator('#gateform').screenshot(path=str(_screenshots_dir / 'decision-panel-model-open.png'))
+    page.locator('.model-panel summary').click()
+    # The shared work-area grid keeps the original form as a display:contents
+    # owner so buttons retain native form semantics without a second visual box.
+    # Capture its visible fields, not the intentionally boxless form owner.
+    page.locator('#gateform .shared-decision-fields').screenshot(path=str(_screenshots_dir / 'decision-panel-model-open.png'))
     page.screenshot(path=str(_screenshots_dir / 'specs-gate-ready.png'),full_page=True)
     sent=[]
     page.route(f'**/api/tasks/{tid}/gates/gate-specs/decide',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'state':'decided'})))
