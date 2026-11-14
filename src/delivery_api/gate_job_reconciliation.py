@@ -55,4 +55,3 @@ def reconcile(execute,task_id,phase,*,apply=False,expected=None,only_job=None,ac
         execute('INSERT INTO audit_log(actor,action,task_id,owner_id,detail,ts) VALUES (%s,%s,%s,%s,%s,%s)',
                 (actor or str(task['owner_id']),'worker.superseded_at_gate',task_id,task['owner_id'],json.dumps({**plan,'fingerprint':fingerprint}),now))
     return {**plan,'fingerprint':fingerprint,'applied':apply}
-

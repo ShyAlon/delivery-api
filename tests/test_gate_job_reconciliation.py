@@ -21,7 +21,7 @@ def test_dry_run_exact_apply_retains_evidence_and_fences_old_writer(pg_workspace
  with pg_workspace_factory() as w,tenant_context(w.scope):
   s,tid,old,new,docs=setup_case(w)
   with s._task_operation_guard('task.gate.decide'):
-   before=s.task(tid);ledger=s.account_balance() if hasattr(s,'account_balance') else None
+   before=s.task(tid)
    plan=reconcile(s._execute_native,tid,'architecture',only_job=old)
    assert plan['changes'][0]['job_id']==old and plan['successor_job_id']==new
    assert s.worker_job(old)['state']=='running'

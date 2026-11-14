@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dry-run-first owner repair. Core predicates are shared with the gate writer."""
 import sys
+import json
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src'))
 from delivery_api.gate_job_reconciliation import reconcile
