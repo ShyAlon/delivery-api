@@ -29,7 +29,7 @@ header #identity{width:90px;min-width:90px}
  header nav{grid-column:1/-1;grid-row:2;justify-self:stretch;align-self:center;height:38px}
  header.nav-compact nav{top:128px}
 }
-@media(max-width:640px){header #identity{width:80px;min-width:80px}}
+@media(max-width:640px){header #identity{width:80px;min-width:80px}header .session-cost.balance{width:100%;min-width:0;justify-self:stretch;text-align:center}}
 /* One document scroll. Headings and navigation never stack as sticky layers. */
 html,body{height:auto!important;min-height:100%;overflow-y:visible!important}
 header,.page-head,.detail-head,.compact-head,.operator-tabs,.private-workspace .tabs,.preview-banner{position:relative!important;top:auto!important}
