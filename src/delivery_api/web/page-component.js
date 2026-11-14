@@ -18,6 +18,18 @@ body{font-size:18px}
 .decision-source pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}
 .decision-source .source-revision,.decision-source blockquote{overflow-wrap:anywhere}
 .source-support-review{margin-top:16px;padding:16px;border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:12px}
+/* Reserve readable shell geometry before asynchronous identity and cost arrive. */
+header #identity{width:90px;min-width:90px}
+@media(min-width:901px){
+ header{height:128px;grid-template-columns:110px 1fr 230px 230px 90px;grid-template-rows:76px 52px;column-gap:12px}
+ header .brand{grid-column:1;grid-row:1}
+ header .session-cost{grid-column:3;grid-row:1;width:230px;min-width:230px}
+ header .session-cost.balance{grid-column:4;grid-row:1;width:230px;min-width:230px}
+ header #identity{grid-column:5;grid-row:1}
+ header nav{grid-column:1/-1;grid-row:2;justify-self:stretch;align-self:center;height:38px}
+ header.nav-compact nav{top:128px}
+}
+@media(max-width:640px){header #identity{width:80px;min-width:80px}}
 /* One document scroll. Headings and navigation never stack as sticky layers. */
 html,body{height:auto!important;min-height:100%;overflow-y:visible!important}
 header,.page-head,.detail-head,.compact-head,.operator-tabs,.private-workspace .tabs,.preview-banner{position:relative!important;top:auto!important}

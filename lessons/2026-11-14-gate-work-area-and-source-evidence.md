@@ -40,3 +40,5 @@ copy. No paid calls, live database writes, merges or owner rebuild are performed
 The smoke gate also reproduced a clean-main regression: compactDecision hid the
 action-consequence explanation permanently. Preserve that explanation alongside
 the decision fields; do not weaken its desktop/phone accessibility check.
+
+The wider shell matrix exposed a real interaction with the 18px floor: authenticated operator links no longer fit the old one-row header, and mobile sign-in exceeded the identity reservation. Keep the 18px floor. Reserve a second desktop navigation row and stable cost/identity slots rather than hide links after auth or truncate the credit balance. The existing delayed-auth, no-reload navigation, and signed-out geometry tests reproduce the regressions and now pass unchanged. Inspect both desktop and mobile pixels after this fix.
