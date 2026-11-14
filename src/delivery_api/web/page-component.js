@@ -5,7 +5,7 @@ const pageStyles={"/assets/style.css": "header{height:84px;border-bottom:1px sol
 const flowStyles=`
 /* Shared readable floor, including browser-default form fonts and provenance metadata. */
 body{font-size:18px}
-:where(header,main,.modal,dialog) :where(b,strong,small,code,pre,span,a,summary){font-size:max(18px,1em)}
+:where(header,main) :where(b,strong,small,code,pre,span,a,summary){font-size:max(18px,1em)}
 .gate-page :where(p,small,label,input,textarea,select,button,summary,blockquote,li,h5,h6),.auth-card :where(input,button,label,small){font-size:max(18px,1em)}
 .gate-page :where(input,textarea,select){font-family:inherit;max-width:100%;box-sizing:border-box}
 .decision-source{padding:18px 0;border-bottom:1px solid var(--line)}

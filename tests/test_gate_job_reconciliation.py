@@ -88,7 +88,7 @@ def test_gate_guard_reconciles_in_same_artifact_transaction_and_rolls_back_on_fa
 def test_standalone_owner_command_dry_run_then_exact_apply(pg_workspace_factory,monkeypatch):
  from pathlib import Path
  import os,subprocess,sys
- from delivery_api.gate_job_reconciliation import __file__ as command
+ command=Path(__file__).resolve().parents[1]/'scripts/ops/reconcile-gate-job.py'
  with pg_workspace_factory() as w,tenant_context(w.scope):
   s,tid,old,new,docs=setup_case(w)
   env=dict(os.environ,REQUI_ADMIN_DATABASE_URL=w.dsn)
