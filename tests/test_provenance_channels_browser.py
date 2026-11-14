@@ -39,3 +39,4 @@ def test_gate_provenance_channels_source_support_and_readable_fonts(pg_browser,w
  assert sizes==[],sizes
  if width<700:assert sources.locator('blockquote').bounding_box()['width']>=230
  page.evaluate('scrollTo(0,0)');page.screenshot(path=f'/tmp/provenance-channels-{width}.png',full_page=False)
+ sources.locator('.decision-source').first.screenshot(path=f'/tmp/provenance-detail-{width}.png')

@@ -46,5 +46,5 @@ export function compactDecision(root){
  for(const node of [root.querySelector('#decision-checklist'),root.querySelector('#gate-decision-status')])if(node)strip.append(node);
  root.prepend(strip);
  const title=root.querySelector('h2');if(title)title.textContent='Your decision';
- const intro=root.querySelector('.dialog-intro');if(intro)intro.hidden=true;
+ // Keep the action consequences readable beside the decision fields.
 }

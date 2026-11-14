@@ -36,3 +36,7 @@ failure rolls the reconciliation back too.
 The local proofs use disposable PostgreSQL, stub services and browser fixtures.
 The observed production job metadata is replayed locally, not a live database
 copy. No paid calls, live database writes, merges or owner rebuild are performed.
+
+The smoke gate also reproduced a clean-main regression: compactDecision hid the
+action-consequence explanation permanently. Preserve that explanation alongside
+the decision fields; do not weaken its desktop/phone accessibility check.
