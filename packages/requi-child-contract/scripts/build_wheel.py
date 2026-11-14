@@ -11,11 +11,11 @@ from pathlib import Path
 import zipfile
 
 root=Path(__file__).resolve().parents[1]
-output=root.parents[1]/'vendor'/'requi_child_contract-0.3.0-py3-none-any.whl'
-info='requi_child_contract-0.3.0.dist-info'
+output=root.parents[1]/'vendor'/'requi_child_contract-0.4.0-py3-none-any.whl'
+info='requi_child_contract-0.4.0.dist-info'
 files={
     'requi_child_contract/__init__.py':(root/'src/requi_child_contract/__init__.py').read_bytes(),
-    f'{info}/METADATA':b'Metadata-Version: 2.1\nName: requi-child-contract\nVersion: 0.3.0\nRequires-Python: >=3.10\nRequires-Dist: pydantic>=2.6,<3\nRequires-Dist: httpx>=0.27\n\n',
+    f'{info}/METADATA':b'Metadata-Version: 2.1\nName: requi-child-contract\nVersion: 0.4.0\nRequires-Python: >=3.10\nRequires-Dist: pydantic>=2.6,<3\nRequires-Dist: httpx>=0.27\n\n',
     f'{info}/WHEEL':b'Wheel-Version: 1.0\nGenerator: requi-offline-contract-builder\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
 }
 for module in ('broker','compute'):

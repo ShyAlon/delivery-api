@@ -178,10 +178,21 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
     with tenant_context(A):
         journal=ChildBrokerJournal(store,op)
         broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=client,endpoint='https://fixed.invalid/chat/completions',headers={},authorize=lambda *a:None)
-        first=broker.dispatch(request());assert broker.dispatch(request())==first
+        value=request()|{'metadata':{'item':'ADR-1','fields':[]}}
+        first=broker.dispatch(value);assert broker.dispatch(value)==first
         row=journal.load((op.operation_id,'call-1','intent'));attempt=store.provider_attempt(row['attempt_id'])
         assert attempt['state']=='settled' and attempt['expense_actual']==8 and attempt['retail_actual']==18
         assert len(calls)==1
+        exported=store.task_cost_export(tid,'provider_attempts')['rows'][0]
+        assert exported['logical_call_id']=='call-1' and exported['item']=='ADR-1'
+        assert exported['provider']=='deepseek' and exported['model']=='deepseek-flash'
+        assert exported['latency_s']>=0 and exported['input_tokens']==2 and exported['output_tokens']==3
+        assert exported['provider_expense_usd']=='8E-12'
+        assert exported['provider_expense']['status']=='recorded_frozen_quote'
+        with pytest.raises(Exception,match='immutable'):
+            with store._postgres.transaction() as conn:
+                conn.execute("UPDATE staged_provider_responses SET call_evidence=call_evidence||'{\"item\":\"tampered\"}'::jsonb WHERE attempt_id=%s",(row['attempt_id'],))
+        assert store.task_cost_export(tid,'provider_attempts')['rows'][0]['item']=='ADR-1'
     with psycopg.connect(DSN) as conn:
         conn.execute('DELETE FROM operator_expense_policy_head');conn.execute('DELETE FROM operator_expense_policy_revisions')
     client.close()

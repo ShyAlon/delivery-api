@@ -6,7 +6,9 @@ from delivery_api.debug_export import redact
 @pytest.mark.parametrize('key',['input_tokens','output_tokens','total_tokens','cache_hit_tokens','cache_miss_tokens','tokens_per_s','prompt_eval_count','eval_count'])
 def test_numeric_metric_is_preserved_but_never_secret_shaped_values(key):
  assert redact({key:123})=={key:123}
- for value in ('sk-secret-fixture',True,{'access_token':'secret-fixture'},['secret-fixture'],None,float('nan'),float('inf'),-1):
+ # Null is explicit unknown evidence, never a credential. Preserve it rather than falsely labeling it redacted.
+ assert redact({key:None})=={key:None}
+ for value in ('sk-secret-fixture',True,{'access_token':'secret-fixture'},['secret-fixture'],float('nan'),float('inf'),-1):
   assert redact({key:value})=={key:'[REDACTED]'},(key,value)
 
 
@@ -54,3 +56,28 @@ def test_client_cost_collector_keeps_failed_source_partial_and_continues():
  assert r.returncode==0,r.stderr
  out=json.loads(r.stdout);assert not out['complete'] and len(out['sections'])==4
  assert out['sections'][1]['availability']=='unavailable' and out['sections'][-1]['complete']
+
+
+@pytest.mark.parametrize('key',['prompt_tokens','completion_tokens','reasoning_tokens','prompt_cache_hit_tokens','prompt_cache_miss_tokens','cached_tokens'])
+def test_provider_native_numeric_counts_survive_both_scrubbers(key):
+ import subprocess,json
+ from pathlib import Path
+ value={key:123,'access_token':'secret-fixture','logical_call_id':'call:'+'a'*64,'snapshot_sha256':'b'*64}
+ assert redact(value)=={**value,'access_token':'[REDACTED]'}
+ module=Path('src/delivery_api/web/log-scrub.js').resolve().as_uri()
+ result=subprocess.run(['node','--input-type=module','-e','import {scrubJson} from '+json.dumps(module)+';console.log(JSON.stringify(scrubJson('+json.dumps(value)+')));'],text=True,capture_output=True)
+ assert result.returncode==0,result.stderr
+ assert json.loads(result.stdout)=={**value,'access_token':'[redacted]'}
+ for v in ('secret-fixture',True,{'access_token':'secret-fixture'}):assert redact({key:v})=={key:'[REDACTED]'}
+
+
+def test_unknown_token_detail_is_null_not_falsely_redacted():
+ import subprocess,json
+ from pathlib import Path
+ value={'reasoning_tokens':None,'cache_hit_tokens':None,'access_token':None}
+ assert redact(value)=={'reasoning_tokens':None,'cache_hit_tokens':None,'access_token':'[REDACTED]'}
+ module=Path('src/delivery_api/web/log-scrub.js').resolve().as_uri()
+ result=subprocess.run(['node','--input-type=module','-e','import {scrubJson,scrubText} from '+json.dumps(module)+';console.log(JSON.stringify([scrubJson('+json.dumps(value)+'),scrubText(\'reasoning_tokens=null access_token=null\')]));'],text=True,capture_output=True)
+ assert result.returncode==0,result.stderr
+ assert json.loads(result.stdout)==[{'reasoning_tokens':None,'cache_hit_tokens':None,'access_token':'[redacted]'},'reasoning_tokens=null access_token=[redacted]']
+ assert redact('reasoning_tokens=null access_token=null')=='reasoning_tokens=null access_token=[REDACTED]'

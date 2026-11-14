@@ -102,6 +102,9 @@ def test_installer_boots_local_when_paid_review_is_missing(monkeypatch,tmp_path)
  class Host(Engine):
   def client(self):return self
   def close(self):pass
+ # Runtime readiness is a separate tested catalog boundary, not this fake-DSN routing fixture.
+ checked=[]
+ monkeypatch.setattr('delivery_api.call_metadata.check_installed_schema',lambda dsn:checked.append(dsn))
  monkeypatch.setattr(child_generator,'ChildGeneratorEngine',Engine)
  monkeypatch.setattr(child_interview,'ChildInterviewHost',Host)
  chosen=[];cloud_runtime.uninstall()
@@ -109,6 +112,7 @@ def test_installer_boots_local_when_paid_review_is_missing(monkeypatch,tmp_path)
   cloud_runtime.install(SimpleNamespace(_postgres=object()),env,chosen.append)
   assert cloud_runtime.installed() and chosen[0].paid_runtime is None
   assert cloud_runtime.gateway_factory().models=={'ollama':payload['row']['model']}
+  assert checked==['host=fixture dbname=fixture']
  finally:cloud_runtime.uninstall();cloud_runtime._failure=None
 
 

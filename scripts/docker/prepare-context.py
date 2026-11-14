@@ -25,7 +25,7 @@ if not a.constraints.is_file():raise SystemExit('Explicit tested dependency cons
 out.mkdir(parents=True);(out/'wheels').mkdir()
 for root in repos.values():
     subprocess.run(['uv','build','--offline','--wheel','--out-dir',str(out/'wheels'),str(root)],check=True)
-shutil.copyfile(a.delivery.resolve()/'vendor/requi_child_contract-0.3.0-py3-none-any.whl',out/'wheels/requi_child_contract-0.3.0-py3-none-any.whl')
+shutil.copyfile(a.delivery.resolve()/'vendor/requi_child_contract-0.4.0-py3-none-any.whl',out/'wheels/requi_child_contract-0.4.0-py3-none-any.whl')
 for wheel in (out/'wheels').glob('*.whl'):
     digest=hashlib.sha256(wheel.read_bytes()).hexdigest()
     manifest[wheel.name]={'sha256':digest}

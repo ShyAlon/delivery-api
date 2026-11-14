@@ -98,6 +98,15 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
             assert '"category":"callers"' in exported_lines()
             for line in exported_lines().splitlines():json.loads(line[len('answer.trace '):])
             if outcome=='success':
+                with w.admin() as conn:
+                    recorded=conn.execute('SELECT evidence FROM answer_charge_usage WHERE owner_id=%s',(w.scope.owner_id,)).fetchall()
+                assert recorded
+                for (item,) in recorded:
+                    facts=item['call_evidence']
+                    assert facts['logical_call_id'].startswith('call:') and facts['provider']=='deepseek'
+                    assert facts['model']=='deepseek-flash' and facts['latency_s']>=0
+                    assert facts['cache_miss_tokens']==10 and facts['cache_hit_tokens']==0
+                    assert facts['provider_expense']=={'status':'unknown_missing_frozen_quote'}
                 # Exercise the exact req-debug collector with REAL retained
                 # answer rows. Only the unavailable Docker transport is doubled;
                 # this is not a claim of target-container/Docker verification.

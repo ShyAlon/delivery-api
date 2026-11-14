@@ -13,7 +13,7 @@ def from_environment(environ,paid_runtime):
     return AnswerAccountingMode(start_credits='0.1')
 
 
-SCHEMA_CHECK="SELECT to_regclass('public.answer_charge_receipts') IS NOT NULL AND to_regclass('public.answer_charge_usage') IS NOT NULL AND to_regprocedure('public.requi_answer_start(text,text,text,text,jsonb)') IS NOT NULL AND to_regprocedure('public.requi_answer_finish(text,jsonb)') IS NOT NULL AS ready"
+SCHEMA_CHECK="SELECT to_regprocedure('public.requi_call_evidence_version()') IS NOT NULL AND to_regclass('public.answer_charge_receipts') IS NOT NULL AND to_regclass('public.answer_charge_usage') IS NOT NULL AND to_regprocedure('public.requi_answer_start(text,text,text,text,jsonb)') IS NOT NULL AND to_regprocedure('public.requi_answer_finish(text,jsonb)') IS NOT NULL AS ready"
 
 
 def check_schema(conn):

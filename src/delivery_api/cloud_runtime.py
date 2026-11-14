@@ -81,6 +81,9 @@ def _install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=N
         if answer_mode is not None:
             from .answer_mode import check_installed_schema
             check_installed_schema(session_dsn)
+        else:
+            from .call_metadata import check_installed_schema
+            check_installed_schema(session_dsn)
         host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime,answer_accounting=answer_mode)
         client=host.client()
     except BaseException as exc:

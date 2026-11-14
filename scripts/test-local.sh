@@ -43,7 +43,7 @@ else
   "$chosen" -m venv .venv
 fi
 PYTHON=.venv/bin/python
-"$PYTHON" -m pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+"$PYTHON" -m pip install vendor/vmodel_contracts-0.29.0-py3-none-any.whl vendor/requi_child_contract-0.4.0-py3-none-any.whl
 "$PYTHON" -m pip install -e '.[dev]'
 SCOPE="${DELIVERY_TEST_SCOPE:-full}"
 # Browser system dependencies are Linux-only; macOS installs just Chromium.

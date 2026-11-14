@@ -52,11 +52,11 @@ class ChildBrokerJournal:
                 (attempt,*identity)).fetchone()
             if row is None:raise BrokerPaused('durable attempt binding missing or repeated')
 
-    def complete(self,key,response,usage):
+    def complete(self,key,response,usage,*,call_evidence=None):
         identity=self._identity(key)
         with self._transaction() as conn:
-            row=conn.execute('UPDATE staged_provider_responses SET response=%s::jsonb,usage=%s::jsonb,completed_at=%s '
+            row=conn.execute('UPDATE staged_provider_responses SET response=%s::jsonb,usage=%s::jsonb,call_evidence=%s::jsonb,completed_at=%s '
                 'WHERE owner_id=%s::uuid AND session_id=%s AND generation=%s AND execution_point=%s AND node=%s '
                 'AND stage=%s AND item=%s AND ordinal=%s AND response IS NULL RETURNING ordinal',
-                (json.dumps(response),json.dumps(usage),time.time(),*identity)).fetchone()
+                (json.dumps(response),json.dumps(usage),json.dumps(call_evidence) if call_evidence is not None else None,time.time(),*identity)).fetchone()
             if row is None:raise BrokerPaused('raw response completion missing or repeated')

@@ -10,7 +10,8 @@ BEARER=re.compile(r'(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+')
 
 # Exact numeric evidence fields only. A matching name with a string, object,
 # boolean, negative or non-finite value is never exempt from redaction.
-METRIC_COUNTS=frozenset(('input_tokens','output_tokens','total_tokens','cache_hit_tokens','cache_miss_tokens','prompt_eval_count','eval_count'))
+# JSON null is absence of evidence, not a secret: retain it as unknown.
+METRIC_COUNTS=frozenset(('prompt_tokens','completion_tokens','reasoning_tokens','prompt_cache_hit_tokens','prompt_cache_miss_tokens','cached_tokens','input_tokens','output_tokens','total_tokens','cache_hit_tokens','cache_miss_tokens','prompt_eval_count','eval_count'))
 METRIC_RATES=frozenset(('tokens_per_s',))
 
 def safe_numeric_metric(key,value):
@@ -19,7 +20,7 @@ def safe_numeric_metric(key,value):
                                 (type(value) is float and math.isfinite(value) and value>=0)))
 
 def _redact_field(key,value):
- if key in METRIC_COUNTS|METRIC_RATES:return value if safe_numeric_metric(key,value) else '[REDACTED]'
+ if key in METRIC_COUNTS|METRIC_RATES:return value if value is None or safe_numeric_metric(key,value) else '[REDACTED]'
  return '[REDACTED]' if SENSITIVE.search(key) else redact(value)
 
 def _redact_assignment(match):
@@ -27,7 +28,7 @@ def _redact_assignment(match):
  raw=match[0][len(prefix):]
  try:value=json.loads(raw)
  except ValueError:value=None
- return match[0] if safe_numeric_metric(key,value) else prefix+'[REDACTED]'
+ return match[0] if safe_numeric_metric(key,value) or key in METRIC_COUNTS|METRIC_RATES and raw.strip()=='null' else prefix+'[REDACTED]'
 
 def redact(value):
  if isinstance(value,dict):return {k:_redact_field(k,v) for k,v in value.items()}

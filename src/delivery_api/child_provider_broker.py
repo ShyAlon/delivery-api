@@ -38,8 +38,15 @@ class ProviderRefused(BrokerPaused):
 
 
 
+class CallMetadata(BaseModel):
+    model_config=ConfigDict(extra='forbid',strict=True,frozen=True)
+    item:Annotated[str,StringConstraints(min_length=1,max_length=200,pattern=r'^[A-Za-z0-9 _./():-]+$')]|None=None
+    fields:Annotated[list[Annotated[str,StringConstraints(pattern=r'^[a-z][a-z0-9_]{0,63}$')]],Field(max_length=32)]=[]
+
+
 class ProviderCall(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True,frozen=True)
+    metadata:CallMetadata|None=None
     call_id:Ref
     stage:Ref
     provider:Literal['deepseek','ollama']
@@ -96,20 +103,34 @@ class ChildProviderBroker:
                     self.journal.bind(key,attempt);self.authorize(self.operation,call);self.gateway.start(attempt)
                 step='transport'
                 from .provider_http import ProviderHTTPError
-                transport_at=time.monotonic()
+                from datetime import datetime,timezone
+                started_at=datetime.now(timezone.utc);transport_at=time.monotonic()
                 try:body,content_type=self.http.send(raw)
                 except ProviderHTTPError as error:
                     from .diagnostic_evidence import record
                     record('child.provider.http_refusal',status=error.status,error_code=error.code,
                         provider=call.provider,model=call.model,reason=str(error))
                     raise
-                transport_ms=int((time.monotonic()-transport_at)*1000)
+                duration=time.monotonic()-transport_at;finished_at=datetime.now(timezone.utc)
+                transport_ms=int(duration*1000)
                 step='usage_decode'
                 usage=self._usage(body,content_type)
                 reply={'status':200,'content_type':content_type,
                     'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
                 step='journal_complete'
-                journal_at=time.monotonic();self.journal.complete(key,reply,usage)
+                journal_at=time.monotonic()
+                if hasattr(self.journal,'_identity'):
+                    # Production journal: completion and safe metadata commit atomically.
+                    from .call_metadata import call_evidence
+                    from .deepseek_usage import normalize as paid_usage
+                    from .ollama_usage import normalize as local_usage
+                    try:
+                        normalized=(paid_usage if call.provider=='deepseek' else local_usage)(usage)
+                        evidence=call_evidence(call,normalized,None,started_at,finished_at,duration)
+                        evidence['provider_expense']={'status':'see_provider_attempt_settlement'}
+                    except (ValueError,RuntimeError):evidence=None
+                    self.journal.complete(key,reply,usage,call_evidence=evidence)
+                else:self.journal.complete(key,reply,usage)  # Explicit fake-journal seam.
                 journal_ms=int((time.monotonic()-journal_at)*1000)
             except BaseException as exc:
                 from .diagnostic_evidence import record

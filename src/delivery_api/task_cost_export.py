@@ -13,7 +13,7 @@ SOURCES={
  'answers':('answer_charge_receipts','answer_id',
   'x.answer_id,x.job_id,x.session_id,x.generation,x.state,x.estimate_units,x.actual_units,x.correction_units,x.units_per_credit,x.overrun,x.started_at,x.settled_at,x.pricing'),
  'answer_usage':('answer_charge_usage','attempt_id',
-  "x.attempt_id,x.answer_id,x.evidence->>'phase' AS phase,x.evidence->'input_tokens' AS input_tokens,x.evidence->'output_tokens' AS output_tokens"),
+  "x.attempt_id,x.answer_id,x.evidence->>'phase' AS phase,x.evidence->'input_tokens' AS input_tokens,x.evidence->'output_tokens' AS output_tokens,x.evidence->'call_evidence' AS call_evidence"),
  'provider_attempts':('provider_attempts','attempt_id',
   "x.attempt_id,x.job_id,x.state,x.expense_actual,x.retail_actual,x.expense_reserved,x.retail_reserved,x.created_at,x.settled_at,x.quote,x.usage"),
  'retail_contributions':('retail_contributions','contribution_key',
@@ -28,6 +28,19 @@ def _safe(value):
  return value
 
 
+def _call_facts(value):
+ keys=('logical_call_id','item','provider','model','latency_s','started_at','finished_at','cache_hit_tokens','cache_miss_tokens','reasoning_tokens')
+ result={k:None for k in keys};result.update(fields=[],field=None,provider_expense=None)
+ if not isinstance(value,dict) or value.get('version')!='call-metadata-v1':return result
+ for k in keys:result[k]=value.get(k)
+ fields=value.get('fields');result['fields']=fields if isinstance(fields,list) else []
+ result['field']=result['fields'][0] if len(result['fields'])==1 else None
+ expense=value.get('provider_expense')
+ if isinstance(expense,dict):
+  result['provider_expense']={k:expense[k] for k in ('status','expense_units','expense_units_per_usd','provider_expense_usd','band','rates','snapshot_sha256','basis') if k in expense}
+ return result
+
+
 def page(store,task_id,source,after=''):
  if source not in SOURCES:raise ValueError('unknown accounting source')
  if not isinstance(after,str) or len(after)>512:raise ValueError('invalid accounting cursor')
@@ -35,11 +48,12 @@ def page(store,task_id,source,after=''):
  table,key,columns=SOURCES[source]
  if source=='answer_usage':
   join="JOIN answer_charge_receipts a ON a.answer_id=x.answer_id JOIN worker_jobs w ON w.job_id=a.job_id LEFT JOIN retail_contributions r ON r.contribution_key='answer-token:'||md5(jsonb_build_array(x.owner_id,a.job_id,a.answer_id,x.attempt_id)::text)"
-  columns+=",a.job_id,r.contribution_key,r.posted_units,r.units_per_credit,r.exact_units,NULL::text AS logical_call_id,NULL::text AS field,NULL::text AS provider,NULL::text AS model,NULL::numeric AS latency_s,NULL::numeric AS provider_expense"
+  columns+=",a.job_id,r.contribution_key,r.posted_units,r.units_per_credit,r.exact_units"
  else:join='JOIN worker_jobs w ON w.job_id=x.job_id'
  if source=='provider_attempts':
   join+=" LEFT JOIN retail_contributions r ON r.contribution_key='attempt:'||x.attempt_id"
-  columns+=',r.contribution_key,r.posted_units,r.units_per_credit'
+  columns+=',r.contribution_key,r.posted_units,r.units_per_credit,ce.call_evidence'
+  join+=" LEFT JOIN LATERAL (SELECT CASE WHEN count(*)=1 THEN (jsonb_agg(s.call_evidence)->0) ELSE NULL END AS call_evidence FROM staged_provider_responses s WHERE s.owner_id=x.owner_id AND s.attempt_id=x.attempt_id) ce ON true"
 
  rows=[dict(r) for r in store._execute_native(
   f'SELECT {columns} FROM {table} x {join} WHERE w.task_id=%s AND x.owner_id=%s AND x.{key}>%s ORDER BY x.{key} LIMIT %s',
@@ -48,7 +62,10 @@ def page(store,task_id,source,after=''):
  for row in rows:
   if 'posted_units' in row and row.get('units_per_credit'):
    row['actual_retail_credits']=str(Decimal(row['posted_units'])/Decimal(row['units_per_credit']))
-  if source=='answer_usage':row['join_provenance']='exact settlement contribution key formula; logical call/field/model/expense not recorded'
+  if source in ('answer_usage','provider_attempts'):
+   facts=_call_facts(row.pop('call_evidence',None));row.update(facts)
+   row['join_provenance']=('exact answer settlement attempt/contribution key' if source=='answer_usage' else 'exact provider attempt/staged-response binding; ambiguous bindings remain unknown')
+   row['call_evidence_status']='recorded' if facts['logical_call_id'] is not None else 'unknown_not_recorded'
   if source=='answers':
    pricing=row.get('pricing') or {};rates=pricing.get('rates') or {}
    row['pricing']={'version':pricing.get('version'),'start_credits':pricing.get('start_credits'),
@@ -62,10 +79,13 @@ def page(store,task_id,source,after=''):
    scale=(row.get('quote') or {}).get('expense_units_per_usd')
    row['provider_expense_usd']=(str(Decimal(row['expense_actual'])/Decimal(scale)) if row.get('expense_actual') is not None and type(scale) is int and scale>0 else None)
    row['provider_expense_status']='recorded_frozen_quote' if row['provider_expense_usd'] is not None else 'unknown_missing_amount_or_scale'
+   row['provider_expense']={'status':row['provider_expense_status'],'provider_expense_usd':row['provider_expense_usd']}
+   for k in ('provider','model'):row[k]=(row.get('quote') or {}).get(k)
+   for k in ('input_tokens','output_tokens','cache_hit_tokens','cache_miss_tokens'):row[k]=(row.get('usage') or {}).get(k)
  return {'task_id':task_id,'source':source,'rows':_safe(rows),'next_cursor':str(rows[-1][key]) if more else None,
   'complete':not more,'scope':'all recorded rows for the selected owned task, stable-id pagination; no live provider calls',
   'limits':{'page_size':PAGE_SIZE},'provenance':{
    'retail':'posted_units / units_per_credit; decimal fields are exact strings; frozen rates only',
    'provider_expense':'provider_attempts expense_actual uses its frozen quote scale; unknown when absent, never retail USD',
-   'answer_v1_gaps':'historical answer usage lacks logical call/field, per-call latency, provider expense and model pin; no time/order joins inferred',
+   'answer_v1_gaps':'historical calls remain unknown where identity/field/model/latency/frozen expense was not recorded; no time/order or current-price backfill',
    'settlement':'answer contribution rows are display evidence, not additional debits; receipt actual replaces estimate via correction'}}

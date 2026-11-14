@@ -86,7 +86,7 @@ def main(argv=None):
     proof_prefix=['uv','run','--no-project','--no-sources','--python',root/'.venv/bin/python',
         '--with-editable',root,'--with-editable',engine,'--with','pytest','--with','pgserver','--with','langchain-ollama',
         '--with',root/'vendor/vmodel_contracts-0.29.0-py3-none-any.whl',
-        '--with',root/'vendor/requi_child_contract-0.3.0-py3-none-any.whl',
+        '--with',root/'vendor/requi_child_contract-0.4.0-py3-none-any.whl',
         'python']
     proof_env={key:value for key,value in os.environ.items() if key in ('PATH','HOME','LANG','TMPDIR','SYSTEMROOT','SSL_CERT_FILE')}
     run([*proof_prefix,'-c','import pytest, pgserver, psycopg, interview_engine, delivery_api, langchain_ollama'],root=root,env=proof_env)
