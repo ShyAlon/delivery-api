@@ -37,7 +37,7 @@ export function refreshDecision(root,blockers,{gated=['[data-action="approve"]',
 }
 
 /* One shared action owner. Original buttons stay inside their original form.
-   No field wrapping, cloned controls, nested action drawers or hidden decisions. */
+   Page may group fields for grid placement, without cloning controls or hiding decisions. */
 export function compactDecision(root){
  if(root.dataset.compactDecision||!root.matches('.gate-controls'))return;
  root.dataset.compactDecision='true';

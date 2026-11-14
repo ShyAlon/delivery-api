@@ -1,10 +1,10 @@
 import {activationAllowed} from './pointer-activation.js';
 // One Table owns table markup, cell behavior and structural styles in both apps.
 const styles=`
-.ui-table{border-collapse:collapse;width:100%;font-size:13px;text-align:left}
+.ui-table{border-collapse:collapse;width:100%;font-size:18px;text-align:left}
 .ui-table th,.ui-table td{padding:11px 10px;border-bottom:1px solid var(--line,#d7ddd4);vertical-align:top;overflow-wrap:anywhere}
 .ui-table thead{position:sticky;top:0;z-index:2;background:var(--card,#fff)}
-.ui-table th{position:sticky;top:0;background:var(--card,#fff);font:11px DM Mono,monospace;color:var(--muted,#667066);z-index:1}
+.ui-table th{position:sticky;top:0;background:var(--card,#fff);font:18px DM Mono,monospace;color:var(--muted,#667066);z-index:1}
 .ui-table th button{padding:0;background:transparent;min-height:24px;color:inherit}
 .ui-table .num{text-align:right}.ui-table .detail{background:var(--paper,#edf0e8)}
 .ui-table-sort{margin:0 0 12px 12px;max-width:100%}

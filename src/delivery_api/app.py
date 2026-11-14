@@ -1643,8 +1643,6 @@ def _interview_transcript_markdown(task_id:str)->str:
 
 def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
     """Derived, conservative provenance. Empty baseline refs do not prove founder intent."""
-    session=_recorded_engine_session(task_id)
-    from vmodel_contracts.runtime import artifacts_root
     preferences=[]
     preference_status={'availability':'absent','reason':'no_saved_intent'}
     try:
@@ -1654,24 +1652,13 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
         preferences=[{'area':p.area.value,'preference':p.preference,'strength':p.strength.value,'source_turns':p.source_turns} for p in intent.tech_preferences]
     except KeyError:pass
     except ValueError:preference_status={'availability':'unavailable','reason':'invalid_or_unreadable'}
-    result=[]
-    for decision in architecture.get("decisions",[]):
-        if not isinstance(decision,dict):continue
-        refs=[str(x) for x in decision.get("baseline_refs") or []]
-        # Canonical baseline references identify inherited system facts, not founder speech.
-        supported=[]
-        for selection in decision.get("technology_selections") or []:
-            if not isinstance(selection,dict):continue
-            name=str(selection.get("display_name") or "").strip().casefold()
-            slot=str(selection.get("slot_id") or "").removeprefix("slot:")
-            for pref in preferences:
-                if pref["source_turns"] and pref["area"]==slot and pref["preference"].strip().casefold()==name:
-                    supported.append({"preference":pref["preference"],"area":pref["area"],
-                                      "source_turns":pref["source_turns"],"strength":pref["strength"]})
-        label="Founder-sourced preference" if supported else "Model-proposed decision"
-        result.append({"decision_id":decision.get("decision_id"),"title":decision.get("title"),
-                       "label":label,"founder_evidence":supported,"baseline_refs":refs,"evidence_status":preference_status})
-    return result
+    ledger=None
+    try:ledger=json.loads(store.read_artifact_bytes(task_id,'handoff','findings-ledger.json'))
+    except KeyError:pass
+    except (ValueError,TypeError):pass  # Missing/invalid supplement is not a finding disposition.
+    from .decision_provenance import project_decisions
+    return project_decisions(architecture,preferences,preference_status,ledger)
+
 
 def _validation_panel_for(task_id:str,raw:str)->dict|None:
     """Validation items grouped by need, built from the session's own artifacts."""

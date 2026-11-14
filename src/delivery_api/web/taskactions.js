@@ -1,3 +1,5 @@
+import {launchHandoff} from './launch-handoff.js';
+import {pageEpoch,pageStale} from './page-lifecycle.js';
 import {Dialog} from './shared-dialog.js';
 import {Table} from './table-component.js';
 import {api,esc,fullTime} from './client-core.js';
@@ -11,6 +13,26 @@ const bindDialogKeys=(...args)=>ctx.bindDialogKeys(...args);
 const pushDialog=(...args)=>ctx.pushDialog(...args);
 const showError=(...args)=>ctx.showError(...args);
 const detail=(...args)=>ctx.detail(...args);
+function wireRetry({task,phase,dialog,picker,confirm,options,endpoint}){
+ confirm.onclick=async()=>{const selected=options.find(option=>option.label===picker.value);if(!selected||!selected.available)return;
+  const at=pageEpoch();let handed=false;
+  try{await runAction(`phase.retry:${task.task_id}`,confirm,async()=>{
+   picker.disabled=true;
+   try{
+    const before=await api(`/api/tasks/${task.task_id}`);
+    if(pageStale(at))return;
+    return await launchHandoff({
+     send:()=>api(`/api/tasks/${task.task_id}/${endpoint}`,{method:'POST',body:JSON.stringify({...(endpoint==='retry-phase'?{phase}:{}),confirm:true,model_route:selected.route,model:selected.model})}),
+     readTask:()=>api(`/api/tasks/${task.task_id}`,{background:true}),phase,afterId:Math.max(0,...(before.events||[]).map(e=>Number(e.id)||0)),
+     stillCurrent:()=>!pageStale(at),
+     onLaunched:async()=>{handed=true;if(dialog.isConnected)closeModal();try{await detail(task.task_id)}catch(error){showError(new Error('The phase launched, but its progress view could not refresh. '+error.message))}}
+    });
+   }finally{picker.disabled=false}
+  },{busyLabel:'Starting…',reason:'Waiting for recorded phase launch; the request will not be resent.'})}
+  catch(error){if(!handed&&dialog.isConnected){confirm.textContent='Retry phase';dialog.querySelector('#retrystatus').innerHTML=`<pre class="notice">${esc(error.message)}</pre>`}
+   else if(location.pathname===`/tasks/${task.task_id}/view`)showError(new Error('The phase launch request ended with an error. Check current task progress before retrying. '+error.message))}
+ };
+}
 async function showFailedNeedsRetry(task){
  const button=document.querySelector('#retryneeds');button.disabled=true;
  try{
@@ -24,7 +46,7 @@ async function showFailedNeedsRetry(task){
   const confirm=dialog.querySelector('#confirmretry');confirm.disabled=!picker.selectedOptions[0]||picker.selectedOptions[0].disabled;
   picker.onchange=()=>{confirm.disabled=!picker.selectedOptions[0]||picker.selectedOptions[0].disabled};
   dialog.querySelector('#cancelretry').onclick=()=>{closeModal();button.disabled=false};
-  confirm.onclick=async()=>{const selected=options.find(option=>option.label===picker.value);if(!selected||!selected.available)return;confirm.disabled=true;confirm.textContent='Starting…';try{await api(`/api/tasks/${task.task_id}/retry-needs`,{method:'POST',body:JSON.stringify({confirm:true,model_route:selected.route,model:selected.model})});closeModal();await detail(task.task_id)}catch(error){confirm.disabled=false;confirm.textContent='Retry phase';dialog.querySelector('#retrystatus').innerHTML=`<pre class="notice">${esc(error.message)}</pre>`}};
+  wireRetry({task,phase:'needs',dialog,picker,confirm,options,endpoint:'retry-needs'});
  }catch(error){button.disabled=false;showError(error)}
 }
 async function showNextPhase(task){
@@ -50,7 +72,7 @@ async function showFailedPhaseRetry(task,phase){
   const confirm=dialog.querySelector('#confirmretry');confirm.disabled=!picker.selectedOptions[0]||picker.selectedOptions[0].disabled;
   picker.onchange=()=>{confirm.disabled=!picker.selectedOptions[0]||picker.selectedOptions[0].disabled};
   dialog.querySelector('#cancelretry').onclick=()=>{closeModal();button.disabled=false};
-  confirm.onclick=async()=>{const selected=options.find(option=>option.label===picker.value);if(!selected||!selected.available)return;confirm.disabled=true;confirm.textContent='Starting…';try{await api(`/api/tasks/${task.task_id}/retry-phase`,{method:'POST',body:JSON.stringify({phase:phase.phase_key,confirm:true,model_route:selected.route,model:selected.model})});closeModal();await detail(task.task_id)}catch(error){confirm.disabled=false;confirm.textContent='Retry phase';dialog.querySelector('#retrystatus').innerHTML=`<pre class="notice">${esc(error.message)}</pre>`}};
+  wireRetry({task,phase:phase.phase_key,dialog,picker,confirm,options,endpoint:'retry-phase'});
  }catch(error){button.disabled=false;showError(error)}
 }
 function showRerun(t){let firstMissing=t.phases.findIndex(p=>!['approved','done'].includes(p.state)),eligible=t.phases.filter((p,i)=>i<=firstMissing||firstMissing<0);Dialog.open(modal,Dialog.html(`<div class="eyebrow">Generation ${t.generation+1} · archive policy</div><h2>Rerun from a stage</h2><p class="dialog-intro">A rerun creates a new generation from the selected boundary. Earlier generations stay available for comparison and audit.</p><label>Start again from<select name="from_phase">${eligible.map(p=>`<option value="${p.phase_key}">${esc(p.phase_key==='intent'?'Start':p.label)}</option>`).join('')}</select></label><div class="notice">Only stages whose prerequisites are complete are available. Downstream artifacts will turn stale immediately, with the cause shown. The previous generation stays available for diffing. Downstream gates require conscious re-approval.</div><div class="actions"><button type="button" class="secondary" id="cancel">Cancel</button><button class="primary">Review impact</button></div>`,{"tag":"form","attributes":{"class":"dialog","id":"rerunform"}}));document.querySelector('#cancel').onclick=()=>modal.classList.add('hidden');bindDialogKeys({form:document.querySelector('#rerunform'),focus:'select[name="from_phase"]'});document.querySelector('#rerunform').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));try{await runAction('task.rerun.preview',e.target.querySelector('button.primary'),async()=>{let r=await api(`/api/tasks/${t.task_id}/rerun`,{method:'POST',body:JSON.stringify({...d,confirm:false})});let layer=pushDialog(Dialog.html(`<div class="eyebrow">Rerun impact</div><h2>Confirm rerun</h2><div class="notice"><b>Will reset:</b> ${r.downstream.map(esc).join(' → ')}<br><br>${esc(r.message)}</div><div class="actions"><button type="button" class="secondary" id="cancel">Back</button><button type="button" class="primary" id="confirm">Confirm rerun</button></div>`,{"tag":"div","attributes":{"class":"dialog rerun-confirm","aria-label":"Confirm rerun"}})),dialog=layer.querySelector('.dialog'),confirm=layer.querySelector('#confirm');layer.querySelector('#cancel').onclick=()=>{layer.remove();e.target.querySelector('select[name="from_phase"]')?.focus()};bindDialogKeys({dialog,primary:confirm,focus:'#confirm'});confirm.onclick=async()=>{try{await runAction('task.rerun',confirm,async()=>{await api(`/api/tasks/${t.task_id}/rerun`,{method:'POST',body:JSON.stringify({...d,confirm:true})});await refreshCurrent(t.task_id)},{busyLabel:'Starting rerun…',reason:'Starting the rerun - one moment',keepDisabledOnSuccess:true})}catch(x){confirm.textContent='Confirm rerun';showError(x)}};},{busyLabel:'Checking…',reason:'Checking rerun impact - one moment'})}catch(x){showError(x)}};}
