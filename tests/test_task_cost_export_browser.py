@@ -44,3 +44,41 @@ def test_everything_download_contains_numeric_accounting_and_no_secrets(pg_brows
  assert row['provider_expense'] is None and row['logical_call_id'] is None
  expect(page.locator('#debugstatus')).to_contain_text('Downloaded requi-everything.zip')
  page.screenshot(path='/tmp/call-export-proof.png',full_page=False)
+
+
+def test_future_call_facts_survive_actual_everything_download(pg_browser,tmp_path):
+ from datetime import datetime,timezone
+ from delivery_api.answer_runtime import AnswerRun,AnswerReceiptStore
+ from delivery_api.answer_pricing import AnswerPricing
+ from delivery_api.call_metadata import call_evidence
+ from delivery_api.child_provider_broker import ProviderCall
+ from test_child_provider_broker import request,BODY
+ from test_call_metadata import quote
+ page,base,w=pg_browser
+ with tenant_context(w.scope):
+  tid=w.store.create_task('Future call export '+uuid4().hex)['task_id']
+  w.store.set_engine_session(tid,str(uuid4()));job=w.store.enqueue_worker(tid,'phase:intent');w.store.claim_worker(job)
+ with w.admin() as c:c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,1000000000,1000000000,0)',(w.scope.owner_id,))
+ call=ProviderCall.model_validate(request()|{'call_id':'call:'+'a'*64,'model':'fixture','metadata':{'item':'scenario:1','fields':['trigger','operational_flow']}})
+ stamp=datetime(2026,10,10,11,tzinfo=timezone.utc)
+ from delivery_api.deepseek_usage import normalize
+ evidence=call_evidence(call,normalize(json.loads(BODY)['usage']),quote(),stamp,stamp,0.25)
+ with tenant_context(w.scope):
+  run=AnswerRun.begin(AnswerReceiptStore(w.store._postgres),answer_id='future-browser-'+uuid4().hex,job_id=job,input_id='input',input_digest='a'*64,pricing=AnswerPricing.from_environment({}))
+  run.record_usage('future-browser-attempt-'+uuid4().hex,'conops',json.loads(BODY)['usage'],call_evidence=evidence);run.record_compute('0');run.finish()
+ page.goto(base+'/tasks/'+tid+'/view')
+ page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click()
+ with page.expect_download() as actual:page.locator('#downloadeverything').click()
+ target=tmp_path/'future-everything.zip';actual.value.save_as(target)
+ with zipfile.ZipFile(target) as z:text=z.read('requi-everything.txt').decode()
+ data=json.loads(text.split('===== Full task call and cost evidence =====\n',1)[1].split('\n\n=====',1)[0])
+ assert data['complete']
+ row=next(x for x in data['sections'] if x['source']=='answer_usage')['rows'][0]
+ assert row['logical_call_id']=='call:'+'a'*64 and row['job_id']==job
+ assert row['fields']==['trigger','operational_flow'] and row['model']=='fixture'
+ assert row['cache_hit_tokens']==0 and row['cache_miss_tokens']==2 and row['latency_s']==0.25
+ assert row['provider_expense']['snapshot_sha256']==evidence['provider_expense']['snapshot_sha256']
+ assert row['provider_expense']['provider_expense_usd']==evidence['provider_expense']['provider_expense_usd']
+ assert row['actual_retail_credits']=='0.0000625' and row['input_tokens']==2 and row['output_tokens']==3
+ expect(page.locator('#debugstatus')).to_contain_text('Downloaded requi-everything.zip')
+ page.screenshot(path='/tmp/future-call-export-proof.png',full_page=False)

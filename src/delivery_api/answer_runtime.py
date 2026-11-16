@@ -89,7 +89,7 @@ class AnswerRun:
         finally:
             with self._lock:self._active-=1
 
-    def record_usage(self,attempt_id,phase,raw):
+    def record_usage(self,attempt_id,phase,raw,*,call_evidence=None):
         from .deepseek_usage import normalize
         try:usage=normalize(raw)
         except (ValueError,RuntimeError) as error:
@@ -98,6 +98,7 @@ class AnswerRun:
             with self._lock:self._unknown+=1
             return False
         evidence={'attempt_id':attempt_id,'phase':phase,'input_tokens':usage['input_tokens'],'output_tokens':usage['output_tokens']}
+        if call_evidence is not None:evidence['call_evidence']=deepcopy(call_evidence)
         with self._lock:
             if self._closed or self._manifest is not None:raise RuntimeError('answer usage already frozen')
             old=self._attempts.get(attempt_id)
@@ -145,10 +146,11 @@ class AnswerRun:
 
 
 class AnswerProviderBroker:
-    def __init__(self,run,*,provider,model,client,endpoint,headers,stop=None):
+    def __init__(self,run,*,provider,model,client,endpoint,headers,stop=None,resolve_quote=None):
         if provider!='deepseek':raise ValueError('answer paid adapter requires a reviewed DeepSeek route')
         from .provider_http import ParentProviderHTTP
         self.run=run;self.provider=provider;self.model=model;self.http=ParentProviderHTTP(client,endpoint,headers)
+        self.resolve_quote=resolve_quote
         self.stop=stop or threading.Event();self.lock=threading.Lock();self._replies={};self.timings=[]
 
     def dispatch(self,value):
@@ -159,7 +161,7 @@ class AnswerProviderBroker:
         if (call.provider,call.model)!=(self.provider,self.model):raise ValueError('provider/model differs from answer snapshot')
         raw=base64.b64decode(call.serialized_request,validate=True)
         if not 0<len(raw)<=MAX_REQUEST:raise ValueError('supported serialized request required')
-        payload,_=request_contract(raw,call.model)
+        payload,output_cap=request_contract(raw,call.model)
         if type(payload.get('stream',False)) is not bool:raise ValueError('boolean stream required')
         digest=hashlib.sha256(raw).hexdigest();key=(call.stage,call.call_id)
         with self.lock:
@@ -169,16 +171,29 @@ class AnswerProviderBroker:
                 if prior[0]!=digest:raise ValueError('logical answer call changed')
                 return deepcopy(prior[1])
             with self.run.provider_call():
-                attempt=uuid4().hex;started=time.monotonic()
+                attempt=uuid4().hex
+                # Pure reviewed-catalog resolution, no admission, current-price IO or DB access.
+                quote=None
+                if self.resolve_quote is not None:
+                    try:quote,_=self.resolve_quote(stage=call.stage,provider=call.provider,model=call.model,serialized_request=raw,max_output_tokens=output_cap)
+                    except Exception:pass  # Missing diagnostic prices are unknown, never fabricated zero.
+                from datetime import datetime,timezone
+                started_at=datetime.now(timezone.utc);started=time.monotonic()
                 try:body,content_type=self.http.send(raw)
                 except BaseException as error:
                     self.run.unknown()
                     if type(error) is ProviderHTTPError:raise ProviderRefused(error) from error
                     raise
+                finished_at=datetime.now(timezone.utc);duration=time.monotonic()-started
                 try:usage=ChildProviderBroker._usage(body,content_type)
                 except Exception:
                     self.run.unknown()
-                else:self.run.record_usage(attempt,call.stage,usage)
+                else:
+                    from .deepseek_usage import normalize
+                    from .call_metadata import call_evidence
+                    try:evidence=call_evidence(call,normalize(usage),quote,started_at,finished_at,duration)
+                    except (ValueError,RuntimeError):evidence=None
+                    self.run.record_usage(attempt,call.stage,usage,call_evidence=evidence)
                 reply={'status':200,'content_type':content_type,'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
                 self._replies[key]=(digest,deepcopy(reply))
                 self.timings.append({'stage':call.stage,'transport_ms':int((time.monotonic()-started)*1000)})

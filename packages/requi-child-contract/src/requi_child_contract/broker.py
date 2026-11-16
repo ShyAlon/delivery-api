@@ -19,9 +19,9 @@ class BrokerUnavailable(RuntimeError):pass
 
 
 class BrokerClient:
-    def __init__(self,fd,*,next_call_id):
+    def __init__(self,fd,*,next_call_id,next_call_metadata=None):
         self.socket=socket.socket(fileno=os.dup(fd));self.socket.settimeout(3600)
-        self.stream=self.socket.makefile('rwb');self.lock=threading.Lock();self.next_call_id=next_call_id;self.failed=False
+        self.stream=self.socket.makefile('rwb');self.lock=threading.Lock();self.next_call_id=next_call_id;self.failed=False;self.next_call_metadata=next_call_metadata
 
     def request(self,*,stage,provider,model,raw):
         with self.lock:
@@ -29,6 +29,9 @@ class BrokerClient:
             try:
                 body={'call_id':self.next_call_id(stage),'stage':stage,'provider':provider,'model':model,
                     'serialized_request':base64.b64encode(raw).decode()}
+                if self.next_call_metadata is not None:
+                    metadata=self.next_call_metadata(stage)
+                    if metadata is not None:body['metadata']=metadata
                 frame=json.dumps(body,separators=(',',':')).encode()+b'\n'
                 if len(frame)>2*1024*1024:raise ValueError('oversized broker request')
                 from .compute import excluded_wait

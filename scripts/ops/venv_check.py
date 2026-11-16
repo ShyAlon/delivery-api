@@ -14,7 +14,7 @@ MODULES = {'psycopg': 'psycopg[binary]>=3.2,<4', 'psycopg_pool': 'psycopg-pool>=
            # The preview browser smoke imports playwright from this venv on the
            # host; without it the smoke dies raw instead of this gate speaking.
            'playwright': 'playwright>=1.48',
-           'requi_child_contract': 'vendor/requi_child_contract-0.3.0-py3-none-any.whl',
+           'requi_child_contract': 'vendor/requi_child_contract-0.4.0-py3-none-any.whl',
            'vmodel_contracts': 'vendor/vmodel_contracts-0.29.0-py3-none-any.whl'}
 
 missing = [(module, package) for module, package in MODULES.items() if importlib.util.find_spec(module) is None]

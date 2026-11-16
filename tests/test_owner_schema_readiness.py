@@ -8,7 +8,7 @@ m=importlib.util.module_from_spec(SPEC)
 def load():SPEC.loader.exec_module(m);return m
 
 def test_all_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==26  # New additive answer receipt/usage migration.
+    s=load();assert len(s.MIGRATIONS)==27  # Adds future-call evidence after the answer receipt/usage migration.
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -96,7 +96,7 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==26  # Includes answer accounting foundation.
+            assert len([x for x in rows if x['status']=='pending'])==27  # Includes answer accounting foundation and its future-call evidence extension.
             # New file has DELETE only inside private projection functions, but
             # does not inherit the owner's exact old retention-file grant.
             with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 16 MIGRATIONS TO delivery_app')
@@ -265,3 +265,16 @@ def test_preview_inventory_uses_actual_restricted_app_connection(pg_runtime_envi
         rows = load().inventory(conn)
         assert all(row['status']=='present' for row in rows)
         assert load().grants(conn)==[]
+
+
+def test_future_call_inventory_requires_complete_guard_and_money_function_extension(pg_runtime_environment):
+ import psycopg,pg_harness
+ s=load();name='20261114051000_future_call_evidence.sql'
+ assert s.MIGRATIONS[name]==('constraint:staged_provider_responses_call_evidence_check','index:staged_provider_call_evidence_attempt_idx','signature:requi_call_evidence_guard()','table-trigger:staged_provider_responses:requi_call_evidence_guard','function-body:requi_answer_finish(text,jsonb):bounded call evidence required','function0:requi_call_evidence_version')
+ pg_runtime_environment()
+ with psycopg.connect(pg_harness.STATE['dsn']) as conn:
+  assert next(x for x in s.inventory(conn) if x['file']==name)['status']=='present'
+  with conn.transaction(force_rollback=True):
+   conn.execute('DROP TRIGGER requi_call_evidence_guard ON staged_provider_responses')
+   assert next(x for x in s.inventory(conn) if x['file']==name)['status']=='partial'
+  assert next(x for x in s.inventory(conn) if x['file']==name)['status']=='present'

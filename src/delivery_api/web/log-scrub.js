@@ -1,7 +1,7 @@
 // Scrubs text before it leaves the browser in a copied log. No DOM here so it can be tested on its own.
 const SECRET_KEY='(?:password|passwd|secret|token|authorization|cookie|api[-_ ]?key|credential|session)';
-const METRIC_COUNTS=new Set(['input_tokens','output_tokens','total_tokens','cache_hit_tokens','cache_miss_tokens','prompt_eval_count','eval_count']);
-const JOIN_IDS=new Set(['answer_id','attempt_id','job_id','contribution_key']);
+const METRIC_COUNTS=new Set(['prompt_tokens','completion_tokens','reasoning_tokens','prompt_cache_hit_tokens','prompt_cache_miss_tokens','cached_tokens','input_tokens','output_tokens','total_tokens','cache_hit_tokens','cache_miss_tokens','prompt_eval_count','eval_count']);
+const JOIN_IDS=new Set(['logical_call_id','snapshot_sha256','answer_id','attempt_id','job_id','contribution_key']);
 const METRIC_RATES=new Set(['tokens_per_s']);
 export function safeNumericMetric(key,value){return typeof value==='number'&&Number.isFinite(value)&&value>=0&&(METRIC_RATES.has(key)||(METRIC_COUNTS.has(key)&&Number.isSafeInteger(value)))}
 export function scrubText(value){
@@ -17,7 +17,7 @@ export function scrubText(value){
   s=s.replace(/\b(?:sk|pk|rk|sb)[-_][A-Za-z0-9_-]{12,}/g,'[key]');
   s=s.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi,m=>m.split('://')[0]+'://[redacted]@');
   s=s.replace(/([?&][^=&\s"']+=)[^&\s"']+/g,'$1[redacted]');
-  s=s.replace(new RegExp('(["\']?[A-Za-z0-9_.-]*'+SECRET_KEY+'[A-Za-z0-9_.-]*["\']?\\s*[:=]\\s*)("[^"]*"|\'[^\']*\'|[^\\s,;}]+)', 'gi'),(all,prefix,raw)=>{const key=prefix.split(/[:=]/,1)[0].trim().replace(/^["']|["']$/g,'');let value;try{value=JSON.parse(raw)}catch{}return safeNumericMetric(key,value)?all:prefix+'[redacted]'});
+  s=s.replace(new RegExp('(["\']?[A-Za-z0-9_.-]*'+SECRET_KEY+'[A-Za-z0-9_.-]*["\']?\\s*[:=]\\s*)("[^"]*"|\'[^\']*\'|[^\\s,;}]+)', 'gi'),(all,prefix,raw)=>{const key=prefix.split(/[:=]/,1)[0].trim().replace(/^["']|["']$/g,'');let value;try{value=JSON.parse(raw)}catch{}return safeNumericMetric(key,value)||((METRIC_COUNTS.has(key)||METRIC_RATES.has(key))&&raw.trim()==='null')?all:prefix+'[redacted]'});
   s=s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,'[email]');
   s=s.replace(/\b[A-Fa-f0-9]{32,}\b/g,'[hex]');
   s=s.replace(/(?<![A-Za-z0-9_\/.-])[A-Za-z0-9_-]{40,}={0,2}(?![A-Za-z0-9_\/.-])/g,m=>/\d/.test(m)&&/[A-Za-z]/.test(m)?'[token]':m);
@@ -40,7 +40,7 @@ export function scrubJson(value){
   if(Array.isArray(value))return value.map(scrubJson);
   if(value&&typeof value==='object'){
     const out={};
-    for(const[k,v]of Object.entries(value))out[k]=JOIN_IDS.has(k)&&typeof v==='string'&&/^[a-zA-Z0-9:_-]{1,240}$/.test(v)?v:(METRIC_COUNTS.has(k)||METRIC_RATES.has(k))?(safeNumericMetric(k,v)?v:'[redacted]'):SENSITIVE_JSON_KEY.test(k)?'[redacted]':scrubJson(v);
+    for(const[k,v]of Object.entries(value))out[k]=JOIN_IDS.has(k)&&typeof v==='string'&&/^[a-zA-Z0-9:_-]{1,240}$/.test(v)?v:(METRIC_COUNTS.has(k)||METRIC_RATES.has(k))?(v===null||safeNumericMetric(k,v)?v:'[redacted]'):SENSITIVE_JSON_KEY.test(k)?'[redacted]':scrubJson(v);
     return out;
   }
   if(typeof value==='string')return scrubText(value);

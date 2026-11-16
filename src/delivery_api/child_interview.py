@@ -588,7 +588,7 @@ class ChildInterviewClient(EngineClient):
                     if answer_run is not None:
                         from .answer_runtime import AnswerProviderBroker
                         broker=AnswerProviderBroker(answer_run,provider=operation.binding.provider,model=operation.binding.model,
-                            client=client,endpoint=endpoint,headers=headers,stop=stop)
+                            client=client,endpoint=endpoint,headers=headers,stop=stop,resolve_quote=getattr(gateway,'resolve_serialized',None))
                     else:
                         broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
                             endpoint=endpoint,headers=headers,authorize=authority)

@@ -118,3 +118,19 @@ def test_local_pre_dispatch_refusal_survives_eof_without_uncertain_attempt():
                 with pytest.raises(BrokerUnavailable):client.request(stage='intent',provider='deepseek',model='deepseek-flash',raw=b'{}')
             finally:client.close()
     assert calls==[] and g.calls==[] and j.row is None
+
+
+def test_optional_call_metadata_crosses_real_channel_without_changing_identity():
+    broker,g,j,calls=setup();seen=[]
+    dispatch=broker.dispatch
+    def capture(value):seen.append(dict(value));return dispatch(value)
+    broker.dispatch=capture
+    with provider_broker_channel(broker) as channel:
+        client=BrokerClient(channel.fileno(),next_call_id=lambda stage:'stable-call-1',
+            next_call_metadata=lambda stage:{'item':'scenario:1','fields':['trigger','operational_flow','exceptions']})
+        try:
+            client.request(stage='intent',provider='deepseek',model='deepseek-flash',raw=b'{"model":"deepseek-flash","max_tokens":10}')
+        finally:client.close()
+    assert seen[0]['call_id']=='stable-call-1'
+    assert seen[0]['metadata']=={'item':'scenario:1','fields':['trigger','operational_flow','exceptions']}
+    assert g.calls==['reserve','start','settle'] and len(calls)==1

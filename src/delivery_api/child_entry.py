@@ -101,10 +101,14 @@ def main():
     event('ready');threading.Thread(target=warm_watch if warm else watch,daemon=True,name='child-parent-watch').start()
     from requi_child_contract.broker import BrokerClient
     from requi_child_contract.compute import ComputeClient,measured_work
-    from interview_engine.child_cursor import broker_call_id
+    from interview_engine import child_cursor as interview_cursor
+    broker_call_id=interview_cursor.broker_call_id
+    call_metadata=getattr(interview_cursor,'broker_call_metadata',None)
     if op.operation.kind=='generator.phase':
-        from spec_generator.child_execution import broker_call_id
-    broker=BrokerClient(int(os.environ['REQUI_CHILD_BROKER_FD']),next_call_id=broker_call_id)
+        from spec_generator import child_execution as generator_cursor
+        broker_call_id=generator_cursor.broker_call_id
+        call_metadata=getattr(generator_cursor,'broker_call_metadata',None)
+    broker=BrokerClient(int(os.environ['REQUI_CHILD_BROKER_FD']),next_call_id=broker_call_id,next_call_metadata=call_metadata)
     compute=ComputeClient(int(os.environ['REQUI_CHILD_COMPUTE_FD'])) if 'REQUI_CHILD_COMPUTE_FD' in os.environ else None
     from contextlib import nullcontext
     from interview_engine.tenant_worker import _root
@@ -194,7 +198,7 @@ def main():
                                 binding2=JobBinding.model_validate(payload['binding'])
                                 fdmap={name:fds[index] for name,index in payload.get('fds',{}).items()}
                                 current[0]=op2
-                                broker2=BrokerClient(fdmap['broker'],next_call_id=broker_call_id)
+                                broker2=BrokerClient(fdmap['broker'],next_call_id=broker_call_id,next_call_metadata=call_metadata)
                                 compute2=ComputeClient(fdmap['compute']) if 'compute' in fdmap else None
                                 if wire_trace is not None:wire_trace.reset()
                                 event('running')
