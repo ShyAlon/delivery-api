@@ -206,7 +206,12 @@ def commit_gate_documents(store,task_id,phase,replacements):
         row=next((p for p in task['phases'] if p['phase_key']==phase),None)
         if not gate or gate['state']!='waiting' or not row or row['state']!='awaiting_approval':raise ValueError('exact waiting gate required')
         if task.get('stop_requested_at') is not None:raise TenantAccessDenied('gate execution stopped')
-        if store._execute_native("SELECT 1 FROM worker_jobs WHERE task_id=%s AND generation=%s AND state='running' LIMIT 1",(task_id,cap.generation)).fetchone():raise ValueError('gate producer is still running')
+        if store._execute_native("SELECT 1 FROM worker_jobs WHERE task_id=%s AND generation=%s AND state='running' LIMIT 1",(task_id,cap.generation)).fetchone():
+            from .gate_job_reconciliation import reconcile
+            try:reconcile(lambda sql,params=():store._execute_native(sql,params,write=sql.startswith(('UPDATE','INSERT'))),task_id,phase,apply=True)
+            except ValueError as exc:raise ValueError('gate producer cannot be cleared: '+str(exc)) from exc
+            if store._execute_native("SELECT 1 FROM worker_jobs WHERE task_id=%s AND generation=%s AND state='running' LIMIT 1",(task_id,cap.generation)).fetchone():
+                raise ValueError('gate producer is still running')
         reader=GeneratorDocuments.reader(store,cap)
         with reader.saver._cursor() as cursor:
             lineage_raw=reader._capture_cursor(cursor,['spec/lineage.json']).get('spec/lineage.json')

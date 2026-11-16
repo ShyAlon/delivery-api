@@ -9,7 +9,7 @@ def test_gate_top_actions_and_fields_visible_and_status_uncovered(pg_browser,wid
   tid=w.store.create_task('Compact gate')['task_id'];w.store.wait_at_gate(tid,'needs')
  page.set_viewport_size({'width':width,'height':height});page.goto(base+'/tasks/'+tid+'/gates/gate-needs')
  expect(page.locator('.shared-action-strip')).to_be_visible()
- approve=page.locator('[data-action=approve]');box=approve.bounding_box();assert box['y']>=0 and box['y']+box['height']<=height
+ approve=page.locator('[data-action=approve]');approve.scroll_into_view_if_needed();box=approve.bounding_box();assert box['y']>=0 and box['y']+box['height']<=height
  expect(page.locator('[name=edited_text]')).to_be_visible();expect(page.locator('[name=steer]')).to_be_visible();expect(page.locator('[name=comment]')).to_be_visible()
  expect(page.locator('.shared-decision-summary')).to_have_count(0)
  assert page.locator('header').evaluate('e=>getComputedStyle(e).position')=='relative'
@@ -22,7 +22,7 @@ def test_gate_top_actions_and_fields_visible_and_status_uncovered(pg_browser,wid
  page.screenshot(path=f'/tmp/shared-gate-{width}.png',full_page=False)
 
 @pytest.mark.parametrize('width,height',[(1475,780),(1280,720),(390,844),(640,480)])
-def test_ready_gate_keyboard_pending_failure_and_reserved_space(pg_browser,width,height):
+def test_ready_gate_keyboard_pending_failure_in_work_area(pg_browser,width,height):
  from playwright.sync_api import expect
  from test_decision_pages_browser import _stack_review
  from urllib.parse import urlparse
@@ -45,9 +45,10 @@ def test_ready_gate_keyboard_pending_failure_and_reserved_space(pg_browser,width
  expect(p.locator('.decision-other-actions')).to_have_count(0)
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  strip=p.locator('.shared-action-strip')
- expect(button).to_be_in_viewport();assert strip.evaluate('e=>getComputedStyle(e).position')=='fixed'
+ expect(button).to_be_in_viewport();assert strip.evaluate('e=>getComputedStyle(e).position')=='static'
  p.evaluate('window.scrollTo(0,document.body.scrollHeight)')
- assert p.locator('body').evaluate('e=>parseFloat(getComputedStyle(e).paddingTop)')>=strip.bounding_box()['height']
+ assert p.locator('body').evaluate('e=>parseFloat(getComputedStyle(e).paddingTop)')==0
+ button.scroll_into_view_if_needed()
  button.focus();p.keyboard.press('Enter')
  status=p.locator('#gate-decision-status');expect(status).to_contain_text('Saving decision and starting the next step')
  expect(button).to_be_disabled();expect(status).to_be_in_viewport()

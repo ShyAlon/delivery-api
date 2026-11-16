@@ -223,15 +223,20 @@ def test_semantic_titles_are_meaningful_and_options_have_tooltips(page):
   assert words in p.locator(f'input[name="action-0"][value="{value}"]').locator('xpath=..').get_attribute('title')
  p.locator('input[name="action-0"][value="remove"]').check();expect(p.locator('#caption-0')).to_contain_text('Delete this item');expect(p.locator('#semantic-count')).to_have_text('1 of 2 decided')
 
-def test_semantic_header_and_footer_stay_visible_and_structural_cannot_be_kept(page):
+def test_semantic_actions_start_work_area_and_structural_cannot_be_kept(page):
  p,base,root=page
  _flag_page(p,base,[_f(i,f'constraint:{i}',['constraints',i],'Item number %d '%i+'words '*30,'structural' if i==0 else 'semantic') for i in range(12)])
  expect(p.locator('input[name="action-0"][value="accept"]')).to_be_disabled();expect(p.locator('input[name="action-1"][value="accept"]')).to_be_enabled()
  p.mouse.wheel(0,2500);p.wait_for_timeout(300)
  vh=p.viewport_size['height']
  head=p.locator('.semantic-head').bounding_box();foot=p.locator('.semantic-footer').bounding_box()
- assert p.locator('.semantic-head').evaluate('e=>getComputedStyle(e).position')=='relative'  # Static heading, persistent bottom action only.
- assert foot['y']+foot['height']<=vh+1 and foot['y']>=0
+ assert p.locator('.semantic-head').evaluate('e=>getComputedStyle(e).position')=='relative'
+ # The approved replacement is document-flow work-area actions, not fixed chrome.
+ assert foot['y']<0
+ p.evaluate('scrollTo(0,0)')
+ foot=p.locator('.semantic-footer').bounding_box();header=p.locator('header').bounding_box()
+ assert foot['y']>=header['y']+header['height']
+ assert foot['y']+foot['height']<=p.locator('.semantic-evidence').bounding_box()['y']
  expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
 
 def test_replace_shows_typed_fields_not_json_and_posts_object(page):
@@ -429,7 +434,7 @@ def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p.set_viewport_size({'width':390,'height':844})
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
  # Shared Page owns the scoped footer too, over pending-form legacy styles.
- expect(p.locator('.semantic-footer')).to_have_css('position','fixed')
+ expect(p.locator('.semantic-footer')).to_have_css('position','static')
  assert p.locator('.semantic-footer').evaluate('e=>getComputedStyle(e).backgroundColor') not in ('transparent','rgba(0, 0, 0, 0)')
  p.locator('.semantic-item').scroll_into_view_if_needed()
  p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
@@ -652,6 +657,8 @@ def test_flagged_inputs_shared_checklist_explains_missing_choice_and_jump(page):
  p.locator('#decision-checklist').scroll_into_view_if_needed()
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  p.wait_for_timeout(600)
+ # Checklist jumps may scroll into evidence; the action row stays at the work-area top.
+ p.locator('.shared-action-strip').scroll_into_view_if_needed()
  expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
  p.screenshot(path=str(SCREENSHOTS/'findings-checklist-mobile.png'))
 
